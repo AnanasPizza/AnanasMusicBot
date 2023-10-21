@@ -6,11 +6,11 @@ If you need help, hosting this on your server, you can always contact me.
 
 ## Prerequisites
 
-Server with nodejs installed
+Server with nodejs installed__
 
-MySQL-Database
+MySQL-Database__
 
-Spotify-App
+Spotify-App__
 https://developer.spotify.com/dashboard/create
 
 Install "forever" globally
