@@ -7,7 +7,9 @@ If you need help, hosting this on your server, you can always contact me.
 ## Prerequisites
 
 Server with nodejs installed
+
 MySQL-Database
+
 Spotify-App
 https://developer.spotify.com/dashboard/create
 
