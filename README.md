@@ -1,6 +1,9 @@
 # AnanasMusicBot
 
+Open Source Twitch Spotify Bot, by twitch.tv/ananasxpress_
+
 AnanasMusicBot allows Twitch-Streamers to host their own Songrequest Channelpoints-Redemptions, by hosting this project.
+There is no additional cost, except from hosting a webserver that can run a NodeJS App, that supports https and certificates.
 
 If you need help, hosting this on your server, you can always contact me.
 
@@ -10,29 +13,31 @@ Server with nodejs installed
 
 MySQL-Database
 
-Spotify-App
+Create Spotify-App
 https://developer.spotify.com/dashboard/create
+
+Create Twitch App
+https://dev.twitch.tv/console/apps
+
+Twitch App
 
 Install "forever" globally
 
 ## Installation
 
-musicbot-server is hosting the channelpoints redemption service.
+```
+npm install
+```
+
+```
+npm install -g forever
+```
 
 ```
 forever start index.js
 ```
 
-musicbot is creating the Chatbot.
-
-```
-forever start irc-client.js
-```
-
-```
-npm install
-```
 
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[CC BY-NC 4.0 DEED](https://creativecommons.org/licenses/by-nc/4.0/)
