@@ -12,6 +12,7 @@ import { RefreshingAuthProvider } from '@twurple/auth';
 import { ChatClient } from '@twurple/chat';
 import schedule from 'node-schedule';
 import bodyParser from 'body-parser';
+import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/lib.js";
 
 // Notification request headers
 const TWITCH_MESSAGE_ID = 'Twitch-Eventsub-Message-Id'.toLowerCase();
@@ -37,7 +38,10 @@ var state = generateRandomString(16);
 
 const app = express();
 
-app.use(express.raw({          // Need raw message body for signature verification
+let databaseDisconnected = false;
+
+// Need raw message body for signature verification
+app.use(express.raw({          
     type: 'application/json'
 }));
 
@@ -65,7 +69,7 @@ let pool = mysql.createPool(dbconfig);
 pool.on('release', () => {
   console.log('Connection released to the pool');
 });
-//TODO: Handle case where connection cannot be aqcuired because of connection drop to db.
+
 pool.on('acquire', () => {
   console.log('Connection acquired from the pool');
 });
@@ -95,7 +99,7 @@ if (!devMode) {
   });
 } else {
   console.log("Development Mode, joining AnanasXpress_ only");
-  twitchIds.push("ananasxpress_");
+  twitchIds.push(process.env.TWITCH_OWNER);
 }
 
 const clientId = process.env.TWITCH_CLIENT;
@@ -254,9 +258,10 @@ app.get('/spotifycallback', function(req, res) {
               let channelname = session.broadcasterName;
               chatClient.join(channelname);
               chatClient.say(channelname, "/me Channel Points Subscription is active now");
-              res.sendStatus(204);
+              res.redirect("https://ananasmusicbot.de/start");
             } catch (error) {
               console.log(error);
+              res.sendStatus(500);
             }
           } else {
             res.redirect("https://ananasmusicbot.de/start");
@@ -635,7 +640,7 @@ app.get("/twitchauth", async (req, res) => {
   let code = req.query.code;
   res.setHeader('X-Auth-Code', code);
   res.send(`
-  <a href="https://www.streamweasels.com/tools/convert-twitch-username-to-user-id" target="_blank">Find your Twitch ID"</a>
+  <a href="https://www.streamweasels.com/tools/convert-twitch-username-to-user-id" target="_blank">Find your Twitch ID</a>
   <form action="/create-subscription" method="post">
     <input type="text" name="broadcaster_user_id" placeholder="Broadcaster User ID">
     <input type="text" name="broadcaster_user_name" placeholder="Broadcaster channelname">
@@ -1574,46 +1579,56 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
 }
 
 function whitelistUser(channel_id, user, channel) {
-  let sql = "DELETE FROM blacklisted_users WHERE channel_id = ? AND blocked_user_name = ?";
-  pool.getConnection(function(conn_err, conn) {
-    if (conn_err) {
-      console.log(console_err);
-      return false;
-    }
-    conn.query(sql, [channel_id, user.toUpperCase()], (query_err, query_result) => {
-      if (query_err) {
-        console.log("Query Error while trying to whitelist userid " + user);
-        console.log(query_err);
-      } else {
-       chatClient.say(channel, "/me User whitelisted");
+  //Make sure there is no SQL injection by using placeholders and input validation
+  if (user.split(' ').length > 1) {
+    chatClient.say(channel, "/me Invalid input");
+  } else {
+    let sql = "DELETE FROM blacklisted_users WHERE channel_id = ? AND blocked_user_name = ?";
+    pool.getConnection(function(conn_err, conn) {
+      if (conn_err) {
+        console.log(console_err);
+        return false;
       }
-      pool.releaseConnection(conn);
+      conn.query(sql, [channel_id, user.toUpperCase()], (query_err, query_result) => {
+        if (query_err) {
+          console.log("Query Error while trying to whitelist userid " + user);
+          console.log(query_err);
+        } else {
+        chatClient.say(channel, "/me User whitelisted");
+        }
+        pool.releaseConnection(conn);
+      });
     });
-  });
+  }
 }
 
 function blacklistUser(channel_id, user, channel) {
-  let sql = "INSERT INTO blacklisted_users(channel_id, blocked_user_name) VALUES (?, ?)";
-  pool.getConnection(function(conn_err, conn) {
-    if (conn_err) {
-      console.log(console_err);
-      return false;
-    }
-    conn.query(sql, [channel_id, user.toUpperCase()], (query_err, query_result) => {
-      if (query_err) {
-        if (query_err.code === "ER_DUP_ENTRY") {
-         chatClient.say(channel, "/me User already blacklisted");
-        } else {
-          console.log("Query Error while trying to blacklist userid " + user);
-          console.log(query_err);
-        }
-      } else {
-        console.log("Query result:");
-       chatClient.say(channel, "/me User blacklisted");
+  //Make sure there is no SQL injection by using placeholders and input validation
+  if (user.split(' ').length > 1) {
+    chatClient.say(channel, "/me Invalid input");
+  } else {
+    let sql = "INSERT INTO blacklisted_users(channel_id, blocked_user_name) VALUES (?, ?)";
+    pool.getConnection(function(conn_err, conn) {
+      if (conn_err) {
+        console.log(console_err);
+        return false;
       }
-      pool.releaseConnection(conn);
+      conn.query(sql, [channel_id, user.toUpperCase()], (query_err, query_result) => {
+        if (query_err) {
+          if (query_err.code === "ER_DUP_ENTRY") {
+          chatClient.say(channel, "/me User already blacklisted");
+          } else {
+            console.log("Query Error while trying to blacklist userid " + user);
+            console.log(query_err);
+          }
+        } else {
+          console.log("Query result:");
+        chatClient.say(channel, "/me User blacklisted");
+        }
+        pool.releaseConnection(conn);
+      });
     });
-  });
+  }
 }
 
 function whitelistTrack(channel_id, url, channel) {
@@ -1789,14 +1804,14 @@ function blacklistArtist(channel_id, url, channel) {
       });
     });
   } else {
-    console.log("Could not extract trackid from url: " + url);
+    console.log("Could not extract artistid from url: " + url);
     return;
   }  
 }
 
 
 
-
+//Upcoming Feature
 function mode(spotifyAuthToken, broadcasterUserName, userInput) {
   if (userInput.toUpperCase() === "BROADCASTERONLY") {
     //Update DB
@@ -1939,7 +1954,7 @@ async function executeSpotifyAction(channel, action, args) {
 
     pool.getConnection(function(err, conn) {
       if (err) {
-        console.log(error);
+        console.log(err);
         pool.releaseConnection(conn);
         return;
       }
@@ -1998,8 +2013,8 @@ async function executeSpotifyAction(channel, action, args) {
                         skipSong(spotifyAuthToken, channel);
                         break;
                     case "skipback":
-                          skipBackSong(spotifyAuthToken, channel);
-                          break;
+                        skipBackSong(spotifyAuthToken, channel);
+                        break;
                     case "resume":
                         resume(spotifyAuthToken, channel);
                         break;
@@ -2054,16 +2069,9 @@ async function executeSpotifyAction(channel, action, args) {
                     }
                     pool.releaseConnection(conn);
                   });
-                  // Don't forget to release the connection when finished!
-                  
                   switch(action) {
                     case "add":
-                      //???? Was soll das hier?
-                      if (songRequestFromArgs !== "") {
-                        addSongToQueue(newAccesstoken, channel, channelid, songRequestFromArgs);  
-                      } else {
-                        addSongToQueue(newAccesstoken, channel, channelid, songRequestFromArgs);  
-                      }
+                      addSongToQueue(newAccesstoken, channel, channelid, songRequestFromArgs);  
                       break;
                     case "queue":
                         let queuesize = (args!== null && args.length > 1) ? args[1] : null;
@@ -2114,28 +2122,4 @@ async function executeSpotifyAction(channel, action, args) {
         });
         pool.releaseConnection(conn);
       });
-}
-
-function isNumberFromOneToTen(number) {
-  try {
-    let intNum = parseInt(number);
-    if (intNum >= 1 && intNum <= 10) {
-      return true;
-    }
-  } catch (error) {
-    return false;
-  }
-  return false;
-}
-
-function convertMillisecondsToMinuteSeconds(milliseconds) {
-  // Calculate minutes and seconds
-  const minutes = Math.floor(milliseconds / 60000);
-  const seconds = ((milliseconds % 60000) / 1000).toFixed(0);
-  
-  // Ensure that both minutes and seconds are two characters long
-  const formattedMinutes = minutes.toString().padStart(2, '0');
-  const formattedSeconds = seconds.toString().padStart(2, '0');
-
-  return `${formattedMinutes}:${formattedSeconds}`;
 }
