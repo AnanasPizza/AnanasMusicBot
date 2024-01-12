@@ -42,7 +42,7 @@ Once this is done, you need to create the connection between your Bot Account an
   - "expires_in" -> Set to 0
   - "obtainmentTimestamp" -> Set to 0
   - "refreshToken" -> Value of "refresh_token" from the POST Request
-  - "scope" -> "[chat:edit,chat:read] 
+  - "scope" -> "[chat:edit,chat:read]"
 
 On the next start, the bot should automatically get a new token and persist it.
 
