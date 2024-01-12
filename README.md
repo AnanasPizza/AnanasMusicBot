@@ -9,28 +9,22 @@ If you need help, hosting this on your server, you can always contact me.
 
 ## Prerequisites
 
-Insomnia REST Caller
+- Insomnia REST Caller (https://insomnia.rest/download)
+- Server with nodejs installed
+- Set up a MySQL-Database
+  - Execute the setup.sql to create the initial database structure
+- Create Spotify-App
+  - https://developer.spotify.com/dashboard/create
+  - Write down your Client ID and Client Secret
+- Create a Twitch Account, that is your actual Chat-Bot
+- Create Twitch App
+  - https://dev.twitch.tv/console/apps
+  - Write down your Client ID and Client Secret
+- Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate and store it securely.
+- Create a file '.env', copy everything from .example.env and fill in the values as described in the placeholders.
 
-Server with nodejs installed
+Once this is done, you need to create the connection between your Bot Account and the Twitch App and allow the Bot to reauthenticate itself
 
-Set up a MySQL-Database
-Execute the setup.sql to create the initial database structure
-
-Create Spotify-App
-https://developer.spotify.com/dashboard/create
-Write down your Client ID and Client Secret
-
-Create Twitch App
-https://dev.twitch.tv/console/apps
-Write down your Client ID and Client Secret
-
-Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate and store it securely.
-
-Create a file '.env', copy everything from .example.env and fill in the values as described in the placeholders.
-
-Install "forever" globally
-
-Authenticate your bot so that it can automatically refresh its token and stay alive:
 - Log into your Twitch Bot Account
 - Navigate to https://id.twitch.tv/oauth2/authorize?response_type=code&client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_TWITCH_REDIRECT_URI&scope=chat%3Aread+chat%3Aedit
 - Authenticate the bot, you will then be redirected to the redirect URI.
@@ -57,13 +51,16 @@ npm install -g forever
 ```
 forever start index.js
 ```
+
+## Usage
+
 To finally use the bot, start it and then visit YOUR_BASE_URL/start
 
 First connect your Twitch Account and give the bot access to the requested scopes. 
 Then fill in your Twitch ID and Username.
 You will be redirected back to the start and can click on Connect to Spotify.
 Give the Spotify App Access to your account
-The Bot should then join your channel.
+The Bot should then join your channel and write a message that it is there. Type !srcommands to check that it works and see all available commands.
 
 If you want to give others the opportunity to use your instance, they have to follow the steps to connect their account and also they need to give you their email address, so that you can add them in the Spotify Developer Console.
 There is a limited space of 25 Users in the Development Mode of a Spotify App.
