@@ -9,6 +9,8 @@ If you need help, hosting this on your server, you can always contact me.
 
 ## Prerequisites
 
+Insomnia REST Caller
+
 Server with nodejs installed
 
 Set up a MySQL-Database
@@ -24,9 +26,23 @@ Write down your Client ID and Client Secret
 
 Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate and store it securely.
 
-Fill in the .env file by replacing the corresponding values.
+Create a file '.env', copy everything from .example.env and fill in the values as described in the placeholders.
 
 Install "forever" globally
+
+Authenticate your bot so that it can automatically refresh its token and stay alive:
+- Log into your Twitch Bot Account
+- Navigate to https://id.twitch.tv/oauth2/authorize?response_type=code&client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_TWITCH_REDIRECT_URI&scope=chat%3Aread+chat%3Aedit
+- Authenticate the bot, you will then be redirected to the redirect URI.
+- Check the URL in your browser, there will be a query parameter called "code".
+- Copy the value
+- Execute a POST request with Insomnia to:
+  https://id.twitch.tv/oauth2/token?client_id=YOUR_CLIENT_ID8&client_secret=YOUR_CLIENT_SECRET&code=CODE_RETURNED_FROM_PREVIOUS_STEP&grant_type=authorization_code&redirect_uri=YOUR_TWITCH_REDIRECT_URI
+- Log into your Database
+- In table 'bot_tokenstore' add a new row
+- Values: "twitch_id" -> Twitch ID of the Bot, "accessToken" -> Value of "access_token" from the POST Request, "expires_in" -> Set to 0, obtainmentTimestamp -> Set to 0, "refreshToken" -> Value of "refresh_token" from the POST Request, "scope" -> "[chat:edit,chat:read] 
+
+On the next start, the bot should automatically get a new token and persist it.
 
 ## Installation
 
@@ -41,7 +57,16 @@ npm install -g forever
 ```
 forever start index.js
 ```
+To finally use the bot, start it and then visit YOUR_BASE_URL/start
 
+First connect your Twitch Account and give the bot access to the requested scopes. 
+Then fill in your Twitch ID and Username.
+You will be redirected back to the start and can click on Connect to Spotify.
+Give the Spotify App Access to your account
+The Bot should then join your channel.
+
+If you want to give others the opportunity to use your instance, they have to follow the steps to connect their account and also they need to give you their email address, so that you can add them in the Spotify Developer Console.
+There is a limited space of 25 Users in the Development Mode of a Spotify App.
 
 ## License
 
