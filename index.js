@@ -13,6 +13,7 @@ import { ChatClient } from '@twurple/chat';
 import schedule from 'node-schedule';
 import bodyParser from 'body-parser';
 import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/lib.js";
+import CryptoJS from "crypto-js";
 
 // Notification request headers
 const TWITCH_MESSAGE_ID = 'Twitch-Eventsub-Message-Id'.toLowerCase();
@@ -30,6 +31,8 @@ const HMAC_PREFIX = 'sha256=';
 
 dotenv.config();
 
+const ENCRYPTION_PWD = process.env.ENCRYPTION_PWD;
+
 const requestTimeoutMap = new Map();
 
 const nick = process.env.NICKNAME;
@@ -37,8 +40,6 @@ const nick = process.env.NICKNAME;
 var state = generateRandomString(16);
 
 const app = express();
-
-let databaseDisconnected = false;
 
 // Need raw message body for signature verification
 app.use(express.raw({          
@@ -83,7 +84,7 @@ app.use(sessions({
   resave: false 
 }));
 
-const sql = 'SELECT twitchlogin FROM tokenstore';
+const sql = 'SELECT twitchlogin FROM tokenstore_encrypted';
 let twitchIds = [];
 console.log('Devmode:' + devMode);
 if (!devMode) {
@@ -98,7 +99,7 @@ if (!devMode) {
     });
   });
 } else {
-  console.log("Development Mode, joining AnanasXpress_ only");
+  console.log("Development Mode, joining " + process.env.TWITCH_OWNER +" only");
   twitchIds.push(process.env.TWITCH_OWNER);
 }
 
@@ -118,7 +119,7 @@ const tokenData = await getTokendata();
 await authProvider.addUserForToken(tokenData, ['chat']);
 
 async function getTokendata() {
-  const sql = 'SELECT * FROM bot_tokenstore where twitch_id = ?';
+  const sql = 'SELECT * FROM bot_tokenstore_encrypted where twitch_id = ?';
   const promisePool = pool.promise();
   const [rows,fields] = await promisePool.query(sql, [process.env.TWITCH_ID]);
   let tokenData = {
@@ -129,8 +130,8 @@ async function getTokendata() {
   };
   // Iterate the results
   rows.forEach((row) => {
-    tokenData.accessToken = row["accessToken"]
-    tokenData.refreshToken = row["refreshToken"],
+    tokenData.accessToken = CryptoJS.AES.decrypt(row["accessToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
+    tokenData.refreshToken = CryptoJS.AES.decrypt(row["refreshToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
     tokenData.expiresIn = row["expiresIn"],
     tokenData.obtainmentTimestamp = row["obtainmentTimestamp"]
   });
@@ -139,17 +140,19 @@ async function getTokendata() {
 
 
 async function updateToken(userId, newTokenData) {
+  let tokenEnc = new String(CryptoJS.AES.encrypt(newTokenData["accessToken"], ENCRYPTION_PWD)).toString();
+  let refreshEnc = new String(CryptoJS.AES.encrypt(newTokenData["refreshToken"], ENCRYPTION_PWD)).toString();
   pool.getConnection(function(conn_err, conn) {
     if (conn_err) {
       console.log(console_err);
       return false;
     }
     const updateQuery = `
-      UPDATE bot_tokenstore
+      UPDATE bot_tokenstore_encrypted
       SET accessToken = ?, expiresIn = ?, obtainmentTimestamp = ?, refreshToken = ?, scope = ?
       WHERE LOWER(twitch_id) = ?
     `;
-    conn.query(updateQuery, [newTokenData["accessToken"], newTokenData["expiresIn"], Date.now(), newTokenData["refreshToken"], "[" + newTokenData["scope"] + "]", userId], (err, results) => {
+    conn.query(updateQuery, [tokenEnc, newTokenData["expiresIn"], Date.now(), refreshEnc, "[" + newTokenData["scope"] + "]", userId], (err, results) => {
       if (err) {
         console.log(err);
         pool.releaseConnection(conn);
@@ -239,8 +242,8 @@ app.get('/spotifycallback', function(req, res) {
       });
       response.on('end', () => {
         let jsonBody = JSON.parse(responseBody);
-        let accesstoken = jsonBody.access_token;
-        let refreshtoken = jsonBody.refresh_token;
+        let accesstoken = new String(CryptoJS.AES.encrypt(jsonBody.access_token, ENCRYPTION_PWD)).toString();
+        let refreshtoken = new String(CryptoJS.AES.encrypt(jsonBody.refresh_token, ENCRYPTION_PWD)).toString();
         let expiresin = jsonBody.expires_in;
         
         let dateInMillisecs = new Date().getTime();
@@ -250,7 +253,7 @@ app.get('/spotifycallback', function(req, res) {
         pool.getConnection(function(err, conn) {
           // Do something with the connection
           if (session.broadcasterId != undefined) {
-            let sql = "INSERT INTO tokenstore(twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration)"
+            let sql = "INSERT INTO tokenstore_encrypted(twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration)"
             +"VALUES('"+session.broadcasterId+"','"+session.broadcasterName+"','"+accesstoken+"','"+refreshtoken+"','"+calcExpiryDate+"')";
             try {
               conn.query(sql);
@@ -303,7 +306,7 @@ app.post('/eventsub', async (req, res) => {
                 // Do something with the connection
 
                 const tokenquery = `
-                  SELECT * FROM tokenstore
+                  SELECT * FROM tokenstore_encrypted
                   WHERE twitchid = ?
                   LIMIT 1
                 `;
@@ -316,8 +319,8 @@ app.post('/eventsub', async (req, res) => {
                   if (results.length > 0) {
                     // The first result is stored in the `results[0]` object.
                     const tokenrow = results[0];
-                    let spotifyAuthToken = tokenrow.spotifytoken;
-                    let refreshToken = tokenrow.spotifyrefresh;
+                    let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+                    let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
                     let expirationSeconds = tokenrow.spotifyexpiration;
 
                     let dateInMillisecs = new Date().getTime();
@@ -350,17 +353,18 @@ app.post('/eventsub', async (req, res) => {
                         response.on('end', () => {
                           let jsonBody = JSON.parse(responseBody);
                           let newAccesstoken = jsonBody.access_token;
+                          let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
                           let newExpiresin = jsonBody.expires_in;
                           let dateInMillisecs = new Date().getTime();
                           let dateInSecs = Math.round(dateInMillisecs / 1000);
                           let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                             const updateQuery = `
-                              UPDATE tokenstore
+                              UPDATE tokenstore_encrypted
                               SET spotifytoken = ?, spotifyexpiration = ?
                               WHERE twitchid = ?
                             `;
                           
-                          conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, broadcasterId], (err, results) => {
+                          conn.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, broadcasterId], (err, results) => {
                             if (err) {
                               pool.releaseConnection(conn);
                               res.sendStatus(204);
@@ -393,7 +397,7 @@ app.post('/eventsub', async (req, res) => {
               // Do something with the connection
 
               const tokenquery = `
-                SELECT * FROM tokenstore
+                SELECT * FROM tokenstore_encrypted
                 WHERE twitchid = ?
                 LIMIT 1
               `;
@@ -406,8 +410,8 @@ app.post('/eventsub', async (req, res) => {
                 if (results.length > 0) {
                   // The first result is stored in the `results[0]` object.
                   const tokenrow = results[0];
-                  let spotifyAuthToken = tokenrow.spotifytoken;
-                  let refreshToken = tokenrow.spotifyrefresh;
+                  let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+                  let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
                   let expirationSeconds = tokenrow.spotifyexpiration;
 
                   let dateInMillisecs = new Date().getTime();
@@ -440,17 +444,18 @@ app.post('/eventsub', async (req, res) => {
                       response.on('end', () => {
                         let jsonBody = JSON.parse(responseBody);
                         let newAccesstoken = jsonBody.access_token;
+                        let newAccesTokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
                         let newExpiresin = jsonBody.expires_in;
                         let dateInMillisecs = new Date().getTime();
                         let dateInSecs = Math.round(dateInMillisecs / 1000);
                         let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                           const updateQuery = `
-                            UPDATE tokenstore
+                            UPDATE tokenstore_encrypted
                             SET spotifytoken = ?, spotifyexpiration = ?
                             WHERE twitchid = ?
                           `;
                         
-                        conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, broadcasterId], (err, results) => {
+                        conn.query(updateQuery, [newAccesTokenEnc, newCalcExpiryDate, broadcasterId], (err, results) => {
                           if (err) {
                             pool.releaseConnection(conn);
                             res.sendStatus(204);
@@ -1960,7 +1965,7 @@ async function executeSpotifyAction(channel, action, args) {
       }
         // Do something with the connection
         const tokenquery = `
-          SELECT * FROM tokenstore
+          SELECT * FROM tokenstore_encrypted
           WHERE LOWER(twitchlogin) = ?
           LIMIT 1
         `;
@@ -1972,8 +1977,8 @@ async function executeSpotifyAction(channel, action, args) {
           if (results.length > 0) {
             // The first result is stored in the `results[0]` object.
             const tokenrow = results[0];
-            let spotifyAuthToken = tokenrow.spotifytoken;
-            let refreshToken = tokenrow.spotifyrefresh;
+            let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+            let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
             let expirationSeconds = tokenrow.spotifyexpiration;
             let channelid = tokenrow.twitchid;
             let dateInMillisecs = new Date().getTime();
@@ -2052,18 +2057,20 @@ async function executeSpotifyAction(channel, action, args) {
                 response.on('end', () => {
                   let jsonBody = JSON.parse(responseBody);
                   let newAccesstoken = jsonBody.access_token;
+                  let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
                   let newExpiresin = jsonBody.expires_in;
                   let dateInMillisecs = new Date().getTime();
                   let dateInSecs = Math.round(dateInMillisecs / 1000);
                   let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                   const updateQuery = `
-                      UPDATE tokenstore
+                      UPDATE tokenstore_encrypted
                       SET spotifytoken = ?, spotifyexpiration = ?
                       WHERE LOWER(twitchlogin) = ?
                     `;
-                  conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, channel.toLowerCase()], (err, results) => {
+                  conn.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()], (err, results) => {
                     if (err) {
-                      chatClient.say("#ananaspizzer_","Error updating token");
+                      console.log("Error updating token");
+                      console.log(err);
                       pool.releaseConnection(conn);
                       return;
                     }
