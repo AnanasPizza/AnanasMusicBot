@@ -11,15 +11,20 @@ If you need help, hosting this on your server, you can always contact me.
 
 Server with nodejs installed
 
-MySQL-Database
+Set up a MySQL-Database
+Execute the setup.sql to create the initial database structure
 
 Create Spotify-App
 https://developer.spotify.com/dashboard/create
+Write down your Client ID and Client Secret
 
 Create Twitch App
 https://dev.twitch.tv/console/apps
+Write down your Client ID and Client Secret
 
-Twitch App
+Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate and store it securely.
+
+Fill in the .env file by replacing the corresponding values.
 
 Install "forever" globally
 
