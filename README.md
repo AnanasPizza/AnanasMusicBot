@@ -1,8 +1,8 @@
 # AnanasMusicBot
 
-Open Source Twitch Spotify Bot, by twitch.tv/ananasxpress_
+Open Source (CC BY-NC 4.0 DEED) Twitch Spotify Bot, by twitch.tv/ananasxpress_
 
-AnanasMusicBot allows Twitch-Streamers to host their own Songrequest Channelpoints-Redemptions, by hosting this project.
+AnanasMusicBot allows Twitch-Streamers to enable Spotify Songrequests via Channelpoints, by hosting this project. Viewers can also get informations about the current, previous and upcoming songs. Moderators can skip songs or change the volume.
 There is no additional cost, except from hosting a webserver that can run a NodeJS App, that supports https and certificates.
 
 If you need help, hosting this on your server, you can always contact me.
