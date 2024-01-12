@@ -20,7 +20,9 @@ If you need help, hosting this on your server, you can always contact me.
 - Create Twitch App
   - https://dev.twitch.tv/console/apps
   - Write down your Client ID and Client Secret
-- Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate and store it securely.
+- Setup your webserver, so that it can host a https Webserver, therefore you need to get a certificate
+  - Create a folder "certs"
+  - Add certificate and key as "cert.pem" and "key.pem" to the folder.
 - Create a file '.env', copy everything from .example.env and fill in the values as described in the placeholders.
 
 Once this is done, you need to create the connection between your Bot Account and the Twitch App and allow the Bot to reauthenticate itself
