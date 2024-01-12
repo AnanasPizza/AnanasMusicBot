@@ -36,7 +36,13 @@ Once this is done, you need to create the connection between your Bot Account an
   https://id.twitch.tv/oauth2/token?client_id=YOUR_CLIENT_ID8&client_secret=YOUR_CLIENT_SECRET&code=CODE_RETURNED_FROM_PREVIOUS_STEP&grant_type=authorization_code&redirect_uri=YOUR_TWITCH_REDIRECT_URI
 - Log into your Database
 - In table 'bot_tokenstore' add a new row
-- Values: "twitch_id" -> Twitch ID of the Bot, "accessToken" -> Value of "access_token" from the POST Request, "expires_in" -> Set to 0, obtainmentTimestamp -> Set to 0, "refreshToken" -> Value of "refresh_token" from the POST Request, "scope" -> "[chat:edit,chat:read] 
+- Values:
+  - "twitch_id" -> Twitch ID of the Bot
+  - "accessToken" -> Value of "access_token" from the POST Request
+  - "expires_in" -> Set to 0
+  - "obtainmentTimestamp" -> Set to 0
+  - "refreshToken" -> Value of "refresh_token" from the POST Request
+  - "scope" -> "[chat:edit,chat:read] 
 
 On the next start, the bot should automatically get a new token and persist it.
 
