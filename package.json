@@ -1,0 +1,37 @@
+{
+  "name": "twitch-music-bot",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.428.0",
+    "@twurple/auth": "^7.0.7",
+    "@twurple/chat": "^7.0.7",
+    "axios": "^1.5.1",
+    "body-parser": "^1.20.2",
+    "collections": "^5.1.13",
+    "cookie-parser": "^1.4.6",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.3.1",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "google-auth-library": "^9.1.0",
+    "irc": "^0.5.2",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.6.1",
+    "node-irc": "^0.0.5",
+    "node-schedule": "^2.1.1",
+    "simple-oauth2": "^5.0.0",
+    "spotify-web-api-node": "^5.0.2",
+    "tmi.js": "^1.8.5"
+  }
+}

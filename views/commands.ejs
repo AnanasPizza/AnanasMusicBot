@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Ananas Music Bot Commands</title>
+  <style>
+    h1, h2, table {
+      width: 90%;
+      padding-left: 5%;
+    }
+
+    table {
+      font-size: x-large;
+    }
+    th {
+      text-align: left;
+    }
+    td {
+      width: 40%;
+    }
+  </style>
+</head>
+<body>
+  <h1>Commands</h1>
+  <h2><u>General Commands</u></h2>
+  <table>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td>!song</td>
+      <td>Get the currently playing song</td>
+    </tr>
+    <tr>
+      <td>!queue / !q [optional: number between 1 - 10, how many items to return]</td>
+      <td>Get next 5 songs</td>
+    </tr>
+    <tr>
+      <td>!rqueue /!rq [optional: number between 1 - 10, how many items to return]</td>
+      <td>Get previous 5 songs</td>
+    </tr>
+    <tr>
+      <td>!playlist</td>
+      <td>Get the currently active playlist/artist/album</td>
+    </tr>
+  </table>
+  <h2><u>Mod Commands</u></h2>
+  <table>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td>!queue [spotify link/search query]</td>
+      <td>Add song to queue</td>
+    </tr>
+    <tr>
+      <td>!play</td>
+      <td>Resume playing</td>
+    </tr>
+    <tr>
+      <td>!resume</td>
+      <td>Resume playing</td>
+    </tr>
+    <tr>
+      <td>!pause</td>
+      <td>Pause currently playing song</td>
+    </tr>
+    <tr>
+      <td>!play [spotify link/search query]</td>
+      <td>Play song instantly, skip queue</td>
+    </tr>
+    <tr>
+      <td>!volume [percentage]</td>
+      <td>Set volume to specific volume</td>
+    </tr>
+    <tr>
+      <td>!skip</td>
+      <td>Skip to next song</td>
+    </tr>
+    <tr>
+      <td>!skipback / !previous</td>
+      <td>Skip back to previous song</td>
+    </tr>
+    <tr>
+      <td>!bluser [twitch username]</td>
+      <td>Blacklist user from requesting songs</td>
+    </tr>
+    <tr>
+      <td>!blusers</td>
+      <td>Get all currently blacklisted users</td>
+    </tr>
+    <tr>
+      <td>!bltrack [spotify track link]</td>
+      <td>Blacklist song from being requested</td>
+    </tr>
+    <tr>
+      <td>!blartist [spotify artist link]</td>
+      <td>Blacklist artist from being requested</td>
+    </tr>
+    <tr>
+      <td>!wluser [twitch username]</td>
+      <td>Remove user from blacklist</td>
+    </tr>
+    <tr>
+      <td>!wltrack [spotify track link]</td>
+      <td>Remove song from blacklist</td>
+    </tr>
+    <tr>
+      <td>!wlartist [spotify artist link]</td>
+      <td>Remove artist from blacklist</td>
+    </tr>
+  </table>
+</body>
+</html>
