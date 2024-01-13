@@ -61,10 +61,10 @@ CREATE TABLE `blacklisted_users` (
 
 CREATE TABLE `bot_tokenstore` (
   `twitch_id` bigint NOT NULL,
-  `accessToken` varchar(255) NOT NULL,
+  `accessToken` varchar(500) NOT NULL,
   `expiresIn` int NOT NULL,
   `obtainmentTimestamp` bigint NOT NULL,
-  `refreshToken` varchar(255) NOT NULL,
+  `refreshToken` varchar(500) NOT NULL,
   `scope` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 
@@ -90,8 +90,8 @@ CREATE TABLE `tokenstore` (
   `id` int NOT NULL,
   `twitchid` varchar(255) NOT NULL,
   `twitchlogin` varchar(255) NOT NULL,
-  `spotifytoken` varchar(255) NOT NULL,
-  `spotifyrefresh` varchar(255) NOT NULL,
+  `spotifytoken` varchar(500) NOT NULL,
+  `spotifyrefresh` varchar(500) NOT NULL,
   `spotifyexpiration` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 
