@@ -13,6 +13,7 @@ import { ChatClient } from '@twurple/chat';
 import schedule from 'node-schedule';
 import bodyParser from 'body-parser';
 import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/lib.js";
+import CryptoJS from "crypto-js";
 
 // Notification request headers
 const TWITCH_MESSAGE_ID = 'Twitch-Eventsub-Message-Id'.toLowerCase();
@@ -30,6 +31,8 @@ const HMAC_PREFIX = 'sha256=';
 
 dotenv.config();
 
+const ENCRYPTION_PWD = process.env.ENCRYPTION_PWD;
+
 const requestTimeoutMap = new Map();
 
 const nick = process.env.NICKNAME;
@@ -37,8 +40,6 @@ const nick = process.env.NICKNAME;
 var state = generateRandomString(16);
 
 const app = express();
-
-let databaseDisconnected = false;
 
 // Need raw message body for signature verification
 app.use(express.raw({          
@@ -98,7 +99,7 @@ if (!devMode) {
     });
   });
 } else {
-  console.log("Development Mode, joining AnanasXpress_ only");
+  console.log("Development Mode, joining " + process.env.TWITCH_OWNER +" only");
   twitchIds.push(process.env.TWITCH_OWNER);
 }
 
@@ -129,8 +130,8 @@ async function getTokendata() {
   };
   // Iterate the results
   rows.forEach((row) => {
-    tokenData.accessToken = row["accessToken"]
-    tokenData.refreshToken = row["refreshToken"],
+    tokenData.accessToken = CryptoJS.AES.decrypt(row["accessToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
+    tokenData.refreshToken = CryptoJS.AES.decrypt(row["refreshToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
     tokenData.expiresIn = row["expiresIn"],
     tokenData.obtainmentTimestamp = row["obtainmentTimestamp"]
   });
@@ -139,6 +140,8 @@ async function getTokendata() {
 
 
 async function updateToken(userId, newTokenData) {
+  let tokenEnc = new String(CryptoJS.AES.encrypt(newTokenData["accessToken"], ENCRYPTION_PWD)).toString();
+  let refreshEnc = new String(CryptoJS.AES.encrypt(newTokenData["refreshToken"], ENCRYPTION_PWD)).toString();
   pool.getConnection(function(conn_err, conn) {
     if (conn_err) {
       console.log(console_err);
@@ -149,7 +152,7 @@ async function updateToken(userId, newTokenData) {
       SET accessToken = ?, expiresIn = ?, obtainmentTimestamp = ?, refreshToken = ?, scope = ?
       WHERE LOWER(twitch_id) = ?
     `;
-    conn.query(updateQuery, [newTokenData["accessToken"], newTokenData["expiresIn"], Date.now(), newTokenData["refreshToken"], "[" + newTokenData["scope"] + "]", userId], (err, results) => {
+    conn.query(updateQuery, [tokenEnc, newTokenData["expiresIn"], Date.now(), refreshEnc, "[" + newTokenData["scope"] + "]", userId], (err, results) => {
       if (err) {
         console.log(err);
         pool.releaseConnection(conn);
@@ -239,8 +242,8 @@ app.get('/spotifycallback', function(req, res) {
       });
       response.on('end', () => {
         let jsonBody = JSON.parse(responseBody);
-        let accesstoken = jsonBody.access_token;
-        let refreshtoken = jsonBody.refresh_token;
+        let accesstoken = new String(CryptoJS.AES.encrypt(jsonBody.access_token, ENCRYPTION_PWD)).toString();
+        let refreshtoken = new String(CryptoJS.AES.encrypt(jsonBody.refresh_token, ENCRYPTION_PWD)).toString();
         let expiresin = jsonBody.expires_in;
         
         let dateInMillisecs = new Date().getTime();
@@ -316,8 +319,8 @@ app.post('/eventsub', async (req, res) => {
                   if (results.length > 0) {
                     // The first result is stored in the `results[0]` object.
                     const tokenrow = results[0];
-                    let spotifyAuthToken = tokenrow.spotifytoken;
-                    let refreshToken = tokenrow.spotifyrefresh;
+                    let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+                    let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
                     let expirationSeconds = tokenrow.spotifyexpiration;
 
                     let dateInMillisecs = new Date().getTime();
@@ -350,6 +353,7 @@ app.post('/eventsub', async (req, res) => {
                         response.on('end', () => {
                           let jsonBody = JSON.parse(responseBody);
                           let newAccesstoken = jsonBody.access_token;
+                          let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
                           let newExpiresin = jsonBody.expires_in;
                           let dateInMillisecs = new Date().getTime();
                           let dateInSecs = Math.round(dateInMillisecs / 1000);
@@ -360,7 +364,7 @@ app.post('/eventsub', async (req, res) => {
                               WHERE twitchid = ?
                             `;
                           
-                          conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, broadcasterId], (err, results) => {
+                          conn.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, broadcasterId], (err, results) => {
                             if (err) {
                               pool.releaseConnection(conn);
                               res.sendStatus(204);
@@ -406,8 +410,8 @@ app.post('/eventsub', async (req, res) => {
                 if (results.length > 0) {
                   // The first result is stored in the `results[0]` object.
                   const tokenrow = results[0];
-                  let spotifyAuthToken = tokenrow.spotifytoken;
-                  let refreshToken = tokenrow.spotifyrefresh;
+                  let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+                  let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
                   let expirationSeconds = tokenrow.spotifyexpiration;
 
                   let dateInMillisecs = new Date().getTime();
@@ -440,6 +444,7 @@ app.post('/eventsub', async (req, res) => {
                       response.on('end', () => {
                         let jsonBody = JSON.parse(responseBody);
                         let newAccesstoken = jsonBody.access_token;
+                        let newAccesTokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
                         let newExpiresin = jsonBody.expires_in;
                         let dateInMillisecs = new Date().getTime();
                         let dateInSecs = Math.round(dateInMillisecs / 1000);
@@ -450,7 +455,7 @@ app.post('/eventsub', async (req, res) => {
                             WHERE twitchid = ?
                           `;
                         
-                        conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, broadcasterId], (err, results) => {
+                        conn.query(updateQuery, [newAccesTokenEnc, newCalcExpiryDate, broadcasterId], (err, results) => {
                           if (err) {
                             pool.releaseConnection(conn);
                             res.sendStatus(204);
@@ -932,7 +937,7 @@ chatClient.onMessage((channel, user, text, msg) => {
           }
           break;
     case "!ircbot": {
-      chatClient.say(channel, "V0.2 Bot is here!");
+      chatClient.say(channel, process.env.VERSION + " Bot is here!");
       break;
     }
   }
@@ -1360,7 +1365,7 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
       }
       axiosInstance(volumeRequest)
         .then(volumeResponse => {
-          let responseStr = "Set volume to " + volume;
+          let responseStr = "/me Set volume to " + volume;
          chatClient.say(broadcasterUserName, responseStr);
         })
         .catch(error => {
@@ -1843,7 +1848,6 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
         chatClient.say(broadcasterUserName, "/me Private Session");
         return;
       }
-
         let responseStr = "/me Currently playing: ";
         let isPlaying = songResponse.data.is_playing;
         let progress_ms = songResponse.data.progress_ms
@@ -1943,7 +1947,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     return false;
   }
 
-async function executeSpotifyAction(channel, action, args) {
+  async function executeSpotifyAction(channel, action, args) {
     let songRequestFromArgs = "";
     let additionalArg = null;
     if (args !== undefined && args !== null && args.length > 1) {
@@ -1958,167 +1962,169 @@ async function executeSpotifyAction(channel, action, args) {
         pool.releaseConnection(conn);
         return;
       }
-      const tokenquery = `
-        SELECT * FROM tokenstore
-        WHERE LOWER(twitchlogin) = ?
-        LIMIT 1
-      `;
-      conn.query(tokenquery, [channel.toLowerCase()], (err, results) => {
-        if (err) {
-          console.error(err);
-          return;
-        }
-        if (results.length > 0) {
-          // The first result is stored in the `results[0]` object.
-          const tokenrow = results[0];
-          let spotifyAuthToken = tokenrow.spotifytoken;
-          let refreshToken = tokenrow.spotifyrefresh;
-          let expirationSeconds = tokenrow.spotifyexpiration;
-          let channelid = tokenrow.twitchid;
-          let dateInMillisecs = new Date().getTime();
-          let dateInSecs = Math.round(dateInMillisecs / 1000);
-
-          if (dateInSecs < parseInt(expirationSeconds) -10 ) {
-              switch(action) {
-                  case "add":
-                      addSongToQueue(spotifyAuthToken, channel, channelid, songRequestFromArgs);
-                      break;
-                  case "queue":
-                      let queuesize = (args!== null && args.length > 1) ? args[1] : null;
-                      getQueue(spotifyAuthToken, channel, queuesize);
-                      break;
-                  case "reversequeue":
-                      let reversequeuesize = (args!== null && args.length > 1) ? args[1] : null;
-                      getReverseQueue(spotifyAuthToken, channel, reversequeuesize);
-                      break;
-                  case "get_volume":
-                      getVolume(spotifyAuthToken, channel);
-                      break;
-                  case "volume": 
-                      let volume = parseInt(args[1]);
-                      if (volume > 100) {
-                        chatClient.say(channel, "/me Max Value is 100");
-                        return;
-                      } else if (volume < 0) {
-                        chatClient.say(channel, "/me Min Value is 0");
-                        return;
-                      }
-                      setVolume(spotifyAuthToken, channel, parseInt(args[1]));
-                      break;
-                  case "song":
-                      getSong(spotifyAuthToken, channel);
-                      break;
-                  case "skip":
-                      skipSong(spotifyAuthToken, channel);
-                      break;
-                  case "skipback":
-                      skipBackSong(spotifyAuthToken, channel);
-                      break;
-                  case "resume":
-                      resume(spotifyAuthToken, channel);
-                      break;
-                  case "play":
-                      play(spotifyAuthToken, channel, channelid, songRequestFromArgs);
-                      break;
-                  case "pause":
-                      pause(spotifyAuthToken, channel);
-                      break;
-                  case "playlist":
-                      getPlaylist(spotifyAuthToken, channel);
-                      break;
-              }
-          } else {
-            //Token invalid, refresh.
-            const options = {
-              hostname: 'accounts.spotify.com',
-              port: 443,
-              path: '/api/token',
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': 'Basic ' + (new Buffer.from(process.env.SPOTIFY_CLIENT + ':' + process.env.SPOTIFY_SECRET).toString('base64'))
-              },
-            };
-            // Create the request body
-            const data = "refresh_token="+refreshToken
-            +"&grant_type=refresh_token";
-            const request = https.request(options, (response) => {
-              // Handle the response
-              let responseBody = '';
-              response.on('data', (chunk) => {
-                responseBody += chunk;
-              });
-              response.on('end', () => {
-                let jsonBody = JSON.parse(responseBody);
-                let newAccesstoken = jsonBody.access_token;
-                let newExpiresin = jsonBody.expires_in;
-                let dateInMillisecs = new Date().getTime();
-                let dateInSecs = Math.round(dateInMillisecs / 1000);
-                let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
-                const updateQuery = `
-                    UPDATE tokenstore
-                    SET spotifytoken = ?, spotifyexpiration = ?
-                    WHERE LOWER(twitchlogin) = ?
-                  `;
-                conn.query(updateQuery, [newAccesstoken, newCalcExpiryDate, channel.toLowerCase()], (err, results) => {
-                  if (err) {
-                    chatClient.say("#ananaspizzer_","Error updating token");
-                    pool.releaseConnection(conn);
-                    return;
-                  }
-                  pool.releaseConnection(conn);
-                });
-                switch(action) {
-                  case "add":
-                    addSongToQueue(newAccesstoken, channel, channelid, songRequestFromArgs);  
-                    break;
-                  case "queue":
-                      let queuesize = (args!== null && args.length > 1) ? args[1] : null;
-                      getQueue(newAccesstoken, channel, queuesize);
-                      break;
-                  case "reversequeue":
-                      let reversequeuesize = (args!== null && args.length > 1) ? args[1] : null;
-                      getReverseQueue(newAccesstoken, channel, reversequeuesize);
-                      break;
-                  case "get_volume":
-                      getVolume(newAccesstoken, channel);
-                      break;
-                  case "volume": 
-                      setVolume(newAccesstoken, channel, parseInt(args[1]));
-                      break;
-                  case "song":
-                      getSong(newAccesstoken, channel);
-                      break;
-                  case "skip":
-                      skipSong(newAccesstoken, channel);
-                      break;
-                  case "skipback":
-                      skipBackSong(newAccesstoken, channel);
-                      break;
-                  case "resume":
-                      resume(newAccesstoken, channel);
-                      break;
-                  case "play":
-                      play(newAccesstoken, channel, channelid, songRequestFromArgs);
-                      break;
-                  case "pause":
-                      pause(newAccesstoken, channel);
-                      break;
-                  case "playlist":
-                      getPlaylist(newAccesstoken, channel);
-                      break;
-              }
-              });
-            });
-            // Write the request body
-            request.write(data);
-            // End the request
-            request.end();
+        // Do something with the connection
+        const tokenquery = `
+          SELECT * FROM tokenstore
+          WHERE LOWER(twitchlogin) = ?
+          LIMIT 1
+        `;
+        conn.query(tokenquery, [channel.toLowerCase()], (err, results) => {
+          if (err) {
+            console.error(err);
+            return;
           }
-        } else {
-          console.log('No token found for Twitch Channel' + channel + '.');
-        }
+          if (results.length > 0) {
+            // The first result is stored in the `results[0]` object.
+            const tokenrow = results[0];
+            let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+            let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+            let expirationSeconds = tokenrow.spotifyexpiration;
+            let channelid = tokenrow.twitchid;
+            let dateInMillisecs = new Date().getTime();
+            let dateInSecs = Math.round(dateInMillisecs / 1000);
+
+            if (dateInSecs < parseInt(expirationSeconds) -10 ) {
+                switch(action) {
+                    case "add":
+                        addSongToQueue(spotifyAuthToken, channel, channelid, songRequestFromArgs);
+                        break;
+                    case "queue":
+                        let queuesize = (args!== null && args.length > 1) ? args[1] : null;
+                        getQueue(spotifyAuthToken, channel, queuesize);
+                        break;
+                    case "reversequeue":
+                        let reversequeuesize = (args!== null && args.length > 1) ? args[1] : null;
+                        getReverseQueue(spotifyAuthToken, channel, reversequeuesize);
+                        break;
+                    case "get_volume":
+                        getVolume(spotifyAuthToken, channel);
+                        break;
+                    case "volume": 
+                        let volume = parseInt(args[1]);
+                        if (volume > 100) {
+                          chatClient.say(channel, "/me Max Value is 100");
+                          return;
+                        } else if (volume < 0) {
+                          chatClient.say(channel, "/me Min Value is 0");
+                          return;
+                        }
+                        setVolume(spotifyAuthToken, channel, parseInt(args[1]));
+                        break;
+                    case "song":
+                        getSong(spotifyAuthToken, channel);
+                        break;
+                    case "skip":
+                        skipSong(spotifyAuthToken, channel);
+                        break;
+                    case "skipback":
+                        skipBackSong(spotifyAuthToken, channel);
+                        break;
+                    case "resume":
+                        resume(spotifyAuthToken, channel);
+                        break;
+                    case "play":
+                        play(spotifyAuthToken, channel, channelid, songRequestFromArgs);
+                        break;
+                    case "pause":
+                        pause(spotifyAuthToken, channel);
+                        break;
+                    case "playlist":
+                        getPlaylist(spotifyAuthToken, channel);
+                        break;
+                }
+            } else {
+              //Token invalid, refresh.
+              const options = {
+                hostname: 'accounts.spotify.com',
+                port: 443,
+                path: '/api/token',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Authorization': 'Basic ' + (new Buffer.from(process.env.SPOTIFY_CLIENT + ':' + process.env.SPOTIFY_SECRET).toString('base64'))
+                },
+              };
+              // Create the request body
+              const data = "refresh_token="+refreshToken
+              +"&grant_type=refresh_token";
+              const request = https.request(options, (response) => {
+                // Handle the response
+                let responseBody = '';
+                response.on('data', (chunk) => {
+                  responseBody += chunk;
+                });
+                response.on('end', () => {
+                  let jsonBody = JSON.parse(responseBody);
+                  let newAccesstoken = jsonBody.access_token;
+                  let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
+                  let newExpiresin = jsonBody.expires_in;
+                  let dateInMillisecs = new Date().getTime();
+                  let dateInSecs = Math.round(dateInMillisecs / 1000);
+                  let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
+                  const updateQuery = `
+                      UPDATE tokenstore
+                      SET spotifytoken = ?, spotifyexpiration = ?
+                      WHERE LOWER(twitchlogin) = ?
+                    `;
+                  conn.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()], (err, results) => {
+                    if (err) {
+                      chatClient.say("#ananaspizzer_","Error updating token");
+                      pool.releaseConnection(conn);
+                      return;
+                    }
+                    pool.releaseConnection(conn);
+                  });
+                  switch(action) {
+                    case "add":
+                      addSongToQueue(newAccesstoken, channel, channelid, songRequestFromArgs);  
+                      break;
+                    case "queue":
+                        let queuesize = (args!== null && args.length > 1) ? args[1] : null;
+                        getQueue(newAccesstoken, channel, queuesize);
+                        break;
+                    case "reversequeue":
+                        let reversequeuesize = (args!== null && args.length > 1) ? args[1] : null;
+                        getReverseQueue(newAccesstoken, channel, reversequeuesize);
+                        break;
+                    case "get_volume":
+                        getVolume(newAccesstoken, channel);
+                        break;
+                    case "volume": 
+                        setVolume(newAccesstoken, channel, parseInt(args[1]));
+                        break;
+                    case "song":
+                        getSong(newAccesstoken, channel);
+                        break;
+                    case "skip":
+                        skipSong(newAccesstoken, channel);
+                        break;
+                    case "skipback":
+                        skipBackSong(newAccesstoken, channel);
+                        break;
+                    case "resume":
+                        resume(newAccesstoken, channel);
+                        break;
+                    case "play":
+                        play(newAccesstoken, channel, channelid, songRequestFromArgs);
+                        break;
+                    case "pause":
+                        pause(newAccesstoken, channel);
+                        break;
+                    case "playlist":
+                        getPlaylist(newAccesstoken, channel);
+                        break;
+                }
+                });
+              });
+              // Write the request body
+              request.write(data);
+              // End the request
+              request.end();
+            }
+          } else {
+            console.log('No token found for Twitch Channel' + channel + '.');
+          }
+        });
+        pool.releaseConnection(conn);
       });
-      pool.releaseConnection(conn);
-    });
-}
+    }
