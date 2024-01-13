@@ -84,7 +84,7 @@ app.use(sessions({
   resave: false 
 }));
 
-const sql = 'SELECT twitchlogin FROM tokenstore_encrypted';
+const sql = 'SELECT twitchlogin FROM tokenstore';
 let twitchIds = [];
 console.log('Devmode:' + devMode);
 if (!devMode) {
@@ -119,7 +119,7 @@ const tokenData = await getTokendata();
 await authProvider.addUserForToken(tokenData, ['chat']);
 
 async function getTokendata() {
-  const sql = 'SELECT * FROM bot_tokenstore_encrypted where twitch_id = ?';
+  const sql = 'SELECT * FROM bot_tokenstore where twitch_id = ?';
   const promisePool = pool.promise();
   const [rows,fields] = await promisePool.query(sql, [process.env.TWITCH_ID]);
   let tokenData = {
@@ -148,7 +148,7 @@ async function updateToken(userId, newTokenData) {
       return false;
     }
     const updateQuery = `
-      UPDATE bot_tokenstore_encrypted
+      UPDATE bot_tokenstore
       SET accessToken = ?, expiresIn = ?, obtainmentTimestamp = ?, refreshToken = ?, scope = ?
       WHERE LOWER(twitch_id) = ?
     `;
@@ -253,7 +253,7 @@ app.get('/spotifycallback', function(req, res) {
         pool.getConnection(function(err, conn) {
           // Do something with the connection
           if (session.broadcasterId != undefined) {
-            let sql = "INSERT INTO tokenstore_encrypted(twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration)"
+            let sql = "INSERT INTO tokenstore(twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration)"
             +"VALUES('"+session.broadcasterId+"','"+session.broadcasterName+"','"+accesstoken+"','"+refreshtoken+"','"+calcExpiryDate+"')";
             try {
               conn.query(sql);
@@ -306,7 +306,7 @@ app.post('/eventsub', async (req, res) => {
                 // Do something with the connection
 
                 const tokenquery = `
-                  SELECT * FROM tokenstore_encrypted
+                  SELECT * FROM tokenstore
                   WHERE twitchid = ?
                   LIMIT 1
                 `;
@@ -359,7 +359,7 @@ app.post('/eventsub', async (req, res) => {
                           let dateInSecs = Math.round(dateInMillisecs / 1000);
                           let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                             const updateQuery = `
-                              UPDATE tokenstore_encrypted
+                              UPDATE tokenstore
                               SET spotifytoken = ?, spotifyexpiration = ?
                               WHERE twitchid = ?
                             `;
@@ -397,7 +397,7 @@ app.post('/eventsub', async (req, res) => {
               // Do something with the connection
 
               const tokenquery = `
-                SELECT * FROM tokenstore_encrypted
+                SELECT * FROM tokenstore
                 WHERE twitchid = ?
                 LIMIT 1
               `;
@@ -450,7 +450,7 @@ app.post('/eventsub', async (req, res) => {
                         let dateInSecs = Math.round(dateInMillisecs / 1000);
                         let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                           const updateQuery = `
-                            UPDATE tokenstore_encrypted
+                            UPDATE tokenstore
                             SET spotifytoken = ?, spotifyexpiration = ?
                             WHERE twitchid = ?
                           `;
@@ -937,7 +937,7 @@ chatClient.onMessage((channel, user, text, msg) => {
           }
           break;
     case "!ircbot": {
-      chatClient.say(channel, "V0.2 Bot is here!");
+      chatClient.say(channel, process.env.VERSION + " Bot is here!");
       break;
     }
   }
@@ -1365,7 +1365,7 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
       }
       axiosInstance(volumeRequest)
         .then(volumeResponse => {
-          let responseStr = "Set volume to " + volume;
+          let responseStr = "/me Set volume to " + volume;
          chatClient.say(broadcasterUserName, responseStr);
         })
         .catch(error => {
@@ -1964,7 +1964,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
       }
         // Do something with the connection
         const tokenquery = `
-          SELECT * FROM tokenstore_encrypted
+          SELECT * FROM tokenstore
           WHERE LOWER(twitchlogin) = ?
           LIMIT 1
         `;
@@ -2062,7 +2062,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
                   let dateInSecs = Math.round(dateInMillisecs / 1000);
                   let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
                   const updateQuery = `
-                      UPDATE tokenstore_encrypted
+                      UPDATE tokenstore
                       SET spotifytoken = ?, spotifyexpiration = ?
                       WHERE LOWER(twitchlogin) = ?
                     `;
