@@ -168,7 +168,7 @@ chatClient.connect();
 
 chatClient.onAuthenticationSuccess((text, retryCount) => {
   console.log("Connected to Server");
-  chatClient.say(process.env.NICKNAME, "AnanasMusicBot V0.2 Connected");
+  chatClient.say(process.env.NICKNAME, "AnanasMusicBot V1 Connected");
 });
 
 chatClient.onAuthenticationFailure((text, retryCount) => {
@@ -912,6 +912,28 @@ chatClient.onMessage((channel, user, text, msg) => {
     case "!song":
         executeSpotifyAction(channel, "song", null);
         break;
+    case "!songlink":
+      executeSpotifyAction(channel, "songlink", null);
+      break;
+    case "!maxlength":
+      //Only one additional argument provided and that is a number between 1 and 10.
+      if (isModUp) {
+        if (args.length > 1) {
+          try {
+            console.log(args);
+            let intNum = parseInt(args[1]);
+            setMaxSongLength(channel, channel_id, intNum);
+          } catch (error) {
+            console.log(error);
+            chatClient.say(channel, "Invalid argument provided. Needs amount in seconds");
+          }
+        } else {
+          getMaxSongLength(channel, channel_id);
+        }
+      } else {
+        getMaxSongLength(channel, channel_id);
+      }
+      break;
     case "!play":
         if (isModUp && args.length >= 2) {
           executeSpotifyAction(channel, "play", args); 
@@ -938,6 +960,10 @@ chatClient.onMessage((channel, user, text, msg) => {
           break;
     case "!ircbot": {
       chatClient.say(channel, process.env.VERSION + " Bot is here!");
+      break;
+    }
+    case "!sourcecode": {
+      chatClient.say(channel, "Interested in the code? https://github.com/AnanasPizza/AnanasMusicBot");
       break;
     }
   }
@@ -972,6 +998,14 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
           .then(async infoResponse => {
             const songname = infoResponse.data.name;
             const artists = infoResponse.data.artists;
+            const duration_ms = infoResponse.data.duration_ms;
+            const maxSongLength = await getMaxSongLength(null, channelId);
+            if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+              chatClient.say(broadcasterName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+              res.sendStatus(204);
+              return;
+            }
+
             let artistBlacklisted = await isArtistBlacklisted(channelId, artists);
             if (artistBlacklisted) {
               chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here");
@@ -1019,6 +1053,13 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
       .then(async searchResponse => {
       try {
         if (searchResponse.status === 200) {
+          const duration_ms = searchResponse.data.tracks.items[0].duration_ms;
+          const maxSongLength = await getMaxSongLength(null, channelId);
+          if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+            chatClient.say(broadcasterName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+            res.sendStatus(204);
+            return;
+          }
           let trackId = searchResponse.data.tracks.items[0].id;
           let artists = searchResponse.data.tracks.items[0].artists;
           let songBlacklisted = await isTrackBlacklisted(channelId, trackId);
@@ -1100,7 +1141,6 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
           const match = regex.exec(userInput);
           if (match) {
             const trackId = match[1];   // The value captured in the first capture group
-      
             let songBlacklisted = await isTrackBlacklisted(channelid, trackId);
             if (songBlacklisted) {
              chatClient.say(broadcasterUserName, "/me This song is blacklisted here");
@@ -1113,6 +1153,12 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
             }
             axiosInstance(infoRequest)
               .then(async infoResponse => {
+                const duration_ms = infoResponse.data.duration_ms;
+                const maxSongLength = await getMaxSongLength(null, channelid);
+                if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+                  chatClient.say(broadcasterUserName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+                  return;
+                }
                 const songname = infoResponse.data.name;
                 const artist = infoResponse.data.artists[0].name;
                 let artists = infoResponse.data.artists;
@@ -1157,6 +1203,12 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
            .then(async searchResponse => {
             try {
               if (searchResponse.status === 200) {
+                const duration_ms = searchResponse.data.tracks.items[0].duration_ms;
+                const maxSongLength = await getMaxSongLength(null, channelid);
+                if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+                  chatClient.say(broadcasterUserName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+                  return;
+                }
                 let trackId = searchResponse.data.tracks.items[0].id;
       
                 let songBlacklisted = await isTrackBlacklisted(channelid, trackId);
@@ -1502,6 +1554,12 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
         }
         axiosInstance(infoRequest)
           .then(async infoResponse => {
+            const duration_ms = infoResponse.data.duration_ms;
+            const maxSongLength = await getMaxSongLength(null, channelid);
+            if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+              chatClient.say(broadcasterUserName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+              return;
+            }
             const songname = infoResponse.data.name;
             let artists = infoResponse.data.artists;
             let artistBlacklisted = await isArtistBlacklisted(channelid, artists);
@@ -1544,6 +1602,13 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
      .then(async searchResponse => {
       try {
         if (searchResponse.status == 200) {
+          const duration_ms = searchResponse.data.tracks.items[0].duration_ms;
+          const maxSongLength = await getMaxSongLength(null, channelid);
+          if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
+            chatClient.say(broadcasterUserName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
+            return;
+          }
+
           let trackId = searchResponse.data.tracks.items[0].id;
           let songBlacklisted = await isTrackBlacklisted(channelid, trackId);
           let artists = searchResponse.data.tracks.items[0].artists;
@@ -1874,6 +1939,56 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     });
   }
 
+  function getSonglink(spotifyAuthToken, broadcasterUserName) {
+    const axiosInstance = axios.create({
+        headers: {
+          Authorization: 'Bearer '+spotifyAuthToken,
+        },
+    });
+    
+    const songRequest = {
+      method: 'GET',
+      url: 'https://api.spotify.com/v1/me/player'
+    }
+    axiosInstance(songRequest)
+    .then(songResponse => {
+      let hasActiveDevice = songResponse.data.device !== undefined && songResponse.data.device.is_active;
+      let isPrivate = hasActiveDevice && songResponse.data.device.is_private_session;
+      if(!hasActiveDevice) {
+        chatClient.say(broadcasterUserName, "/me No active device");
+        return;
+      }
+      if (isPrivate) {
+        chatClient.say(broadcasterUserName, "/me Private Session");
+        return;
+      }
+        let responseStr = "/me Currently playing: ";
+        let isPlaying = songResponse.data.is_playing;
+        let progress_ms = songResponse.data.progress_ms
+        const songItem = songResponse.data.item;
+        let duration = songItem.duration_ms;
+        let currentTime = convertMillisecondsToMinuteSeconds(progress_ms);
+        let totalTime = convertMillisecondsToMinuteSeconds(duration);
+
+        let progressString = currentTime +" / " + totalTime;
+        if (isPlaying && songItem != null) {
+          responseStr += "'" + songItem.name + "' by " + "'" +songItem.artists[0].name + "'";
+          responseStr += " (" + progressString +")";
+          if (songResponse.data.device !== undefined && songResponse.data.device.volume_percent !== undefined) {
+            responseStr += " 🔊 " + songResponse.data.device.volume_percent + "%"
+          }
+          responseStr += " " + songItem.external_urls.spotify;
+        } else {
+          responseStr = "/me No song is played currently";
+        }
+        chatClient.say(broadcasterUserName, responseStr);
+    })
+    .catch(error => {
+        console.log("Error getting song: " + error);
+       chatClient.say(broadcasterUserName, "Could not get currently playing song");
+    });
+  }
+
   function getPlaylist(spotifyAuthToken, broadcasterUserName) {
     const axiosInstance = axios.create({
         headers: {
@@ -1947,6 +2062,67 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     return false;
   }
 
+  async function isSongTooLong(channel_id, millis) {
+    const promisePool = pool.promise();
+    let sql = "SELECT * FROM channel_settings WHERE channel_id = ? AND settings_key = ?";  
+    const [rows,fields] = await promisePool.query(sql, [channel_id, "max_duration"]);
+    if (rows.length >= 1) {
+      let row = rows[1];
+      let val = row["settings_val"];
+      console.log(val);
+      return parseInt(val) < (millis / 1000);
+    }
+    return false;
+  }
+
+  function setMaxSongLength(channel, channel_id, seconds) {
+    let sql = "INSERT INTO channel_settings(channel_id, settings_key, settings_val) VALUES (?, ?, ?)";
+    pool.getConnection(function(conn_err, conn) {
+      if (conn_err) {
+        console.log(console_err);
+        return false;
+      }
+      conn.query(sql, [channel_id, "max_duration", seconds], (query_err, query_result) => {
+        if (query_err) {
+          if (query_err.code === "ER_DUP_ENTRY") {
+            let updateSql = "UPDATE channel_settings SET settings_val = ? WHERE channel_id = ? AND settings_key = ?";
+            conn.query(updateSql, [seconds, channel_id, "max_duration"], (new_query_err, new_query_result) => {
+              if (new_query_err) {
+                chatClient.say(channel, "/me Error when updating value");
+              } else {
+                chatClient.say(channel, "/me Updated value for maximum song length to " + seconds + " seconds");
+              }
+            });
+          } else {
+            console.log("Error when inserting settings value");
+            console.log(query_err);
+          }
+        } else {
+          chatClient.say(channel, "/me Set value for maximum song length to " + seconds + " seconds");
+        }
+        pool.releaseConnection(conn);
+      });
+    });  
+  }
+
+  async function getMaxSongLength(channel, channel_id) {
+    const promisePool = pool.promise();
+    let sql = "SELECT * FROM channel_settings WHERE channel_id = ? AND settings_key = ?";  
+    const [rows,fields] = await promisePool.query(sql, [channel_id, "max_duration"]);
+    if (rows.length >= 1) {
+      let row = rows[0];
+      let val = row["settings_val"];
+      if (channel !== null) {
+        chatClient.say(channel, "/me Max. song length is currently set to " + val + " seconds");
+      }
+      return val;
+    }
+    if (channel !== null) {
+      chatClient.say(channel, "/me Max. song length is currently not set");
+    }
+    return null;
+  }
+
   async function executeSpotifyAction(channel, action, args) {
     let songRequestFromArgs = "";
     let additionalArg = null;
@@ -2012,6 +2188,9 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
                         break;
                     case "song":
                         getSong(spotifyAuthToken, channel);
+                        break;
+                    case "songlink":
+                        getSonglink(spotifyAuthToken, channel);
                         break;
                     case "skip":
                         skipSong(spotifyAuthToken, channel);
@@ -2095,6 +2274,9 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
                     case "song":
                         getSong(newAccesstoken, channel);
                         break;
+                    case "songlink":
+                      getSonglink(newAccesstoken, channel);
+                      break;
                     case "skip":
                         skipSong(newAccesstoken, channel);
                         break;
