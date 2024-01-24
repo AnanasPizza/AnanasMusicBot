@@ -75,7 +75,7 @@ CREATE TABLE `bot_tokenstore` (
 --
 
 CREATE TABLE `channel_settings` (
-  `channel_name` varchar(255) NOT NULL,
+  `channel_id` varchar(255) NOT NULL,
   `settings_key` varchar(255) NOT NULL,
   `settings_val` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
@@ -130,7 +130,7 @@ ALTER TABLE `bot_tokenstore`
 -- Indizes für die Tabelle `channel_settings`
 --
 ALTER TABLE `channel_settings`
-  ADD UNIQUE KEY `channel_name` (`channel_name`,`settings_key`);
+  ADD UNIQUE KEY `channel_id` (`channel_id`,`settings_key`);
 
 --
 -- Indizes für die Tabelle `tokenstore`
