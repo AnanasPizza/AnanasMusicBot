@@ -48,6 +48,8 @@ app.use(express.raw({
 
 app.use(bodyParser.urlencoded({ extended: true }));
 
+app.use('/', express.static('public'));
+
 let dbconfig = {
   host: process.env.DB_HOST,
   port: 3306,
@@ -663,6 +665,79 @@ app.get('/commands', (req,res)=>{
   res.render('commands.ejs');
 });
 
+app.get('/channels/:channelid/blacklisted-tracks', async (req, res) => {
+  const promisePool = pool.promise();
+  const channel_id = req.params.channelid;
+  const channelname = req.query.channelname;
+  let sql = "SELECT * FROM blacklisted_tracks where channel_id = ?";
+  const [rows,fields] = await promisePool.query(sql, [channel_id]);
+  let tracks = [];
+  if (rows.length < 1) {
+    console.log("No blacklisted tracks in database");
+  } else {
+    
+    for (let i = 0; i < rows.length; i++) {
+      let track = {
+        name: rows[i].songname,
+        artist: rows[i].artist,
+        tracklink: "https://open.spotify.com/intl-de/track/" + rows[i].blocked_track_id
+      }
+      tracks.push(track);
+    }
+  }
+  res.render('blacklisted-tracks.ejs', {
+    tracks: tracks,
+    channelname: channelname
+  });
+});
+
+app.get('/channels/:channelid/blacklisted-artists', async (req, res) => {
+  const promisePool = pool.promise();
+  const channel_id = req.params.channelid;
+  const channelname = req.query.channelname;
+  let sql = "SELECT * FROM blacklisted_artists where channel_id = ?";
+  const [rows,fields] = await promisePool.query(sql, [channel_id]);
+  let artists = [];
+  if (rows.length < 1) {
+    console.log("No blacklisted artists in database");
+  } else {
+    for (let i = 0; i < rows.length; i++) {
+      let artist = {
+        artist: rows[i].name,
+        artistlink: "https://open.spotify.com/intl-de/artist/" + rows[i].blocked_artist_id
+      }
+      artists.push(artist);
+    }
+  }
+  res.render('blacklisted-artists.ejs', {
+    artists: artists,
+    channelname: channelname
+  });
+});
+
+app.get('/channels', async (req, res) => {
+  const promisePool = pool.promise();
+  let sql = "SELECT twitchlogin, twitchid FROM tokenstore";
+  const [rows,fields] = await promisePool.query(sql);
+  if (rows.length < 1) {
+    console.log("No users in database");
+    res.sendStatus(404);
+  } else {
+    let channels = [];
+    for (let i = 0; i < rows.length; i++) {
+      let channel = {
+        channelname:rows[i].twitchlogin,
+        channelid:rows[i].twitchid
+      }
+      channels.push(channel);
+    }
+    res.render('channels.ejs', {
+      channels: channels
+    });
+  }
+});
+
+
 function getSecret() {
     return process.env.SUBSCRIPTION_SECRET;
 }
@@ -699,9 +774,9 @@ function generateRandomString(length) {
 
 
 
-
+var httpServer = http.createServer(app);
 if (!devMode) {
-  var httpServer = http.createServer(app);
+  
   const options = {
     key: fs.readFileSync('/etc/letsencrypt/live/ananasmusicbot.de/privkey.pem'),
     cert: fs.readFileSync('/etc/letsencrypt/live/ananasmusicbot.de/fullchain.pem'),
@@ -709,9 +784,8 @@ if (!devMode) {
   
   var httpsServer = https.createServer(options, app);
   httpsServer.listen(443);
-  httpServer.listen(80);
 }
-
+httpServer.listen(80);
 
 
 
@@ -1005,10 +1079,10 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
               res.sendStatus(204);
               return;
             }
-
             let artistBlacklisted = await isArtistBlacklisted(channelId, artists);
             if (artistBlacklisted) {
-              chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here");
+              let link = blacklistedArtistsLink(channelId, broadcasterName);
+              chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
               res.sendStatus(204);
               return;
             }
@@ -1068,7 +1142,8 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
             chatClient.say(broadcasterName, "/me @"+ requestedBy+", This song is blacklisted here");
             res.sendStatus(204);
           } else if (artistBlacklisted) {
-            chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here");
+            let link = blacklistedArtistsLink(channelId, broadcasterName);
+            chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
             res.sendStatus(204);
           } else {
             let name = searchResponse.data.tracks.items[0].name;
@@ -1164,7 +1239,8 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
                 let artists = infoResponse.data.artists;
                 let artistBlacklisted = await isArtistBlacklisted(channelid, artists);
                 if (artistBlacklisted) {
-                 chatClient.say(broadcasterUserName, "/me At least one artist is blacklisted here");
+                  let link = blacklistedArtistsLink(channelid, broadcasterUserName);
+                  chatClient.say(broadcasterUserName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
                   return;
                 }
                 requestUri += trackId;
@@ -1219,7 +1295,8 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
                 let artists = searchResponse.data.tracks.items[0].artists;
                 let artistBlacklisted = await isArtistBlacklisted(channelid, artists);
                 if (artistBlacklisted) {
-                 chatClient.say(broadcasterUserName, "/me At least one artist is blacklisted here");
+                  let link = blacklistedArtistsLink(channelid, broadcasterUserName);
+                  chatClient.say(broadcasterUserName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
                   return;
                 }
       
@@ -1564,7 +1641,8 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
             let artists = infoResponse.data.artists;
             let artistBlacklisted = await isArtistBlacklisted(channelid, artists);
             if (artistBlacklisted) {
-             chatClient.say(broadcasterUserName, "/me At least one artist is blacklisted here");
+              let link = blacklistedArtistsLink(channelid, broadcasterUserName);
+              chatClient.say(broadcasterUserName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
               return;
             }
             const artist = infoResponse.data.artists[0].name;
@@ -1614,10 +1692,11 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
           let artists = searchResponse.data.tracks.items[0].artists;
           let artistBlacklisted = await isArtistBlacklisted(channelid, artists);
           if (songBlacklisted) {
-           chatClient.say(broadcasterUserName, "/me This song is blacklisted here");
+            chatClient.say(broadcasterUserName, "/me This song is blacklisted here");
             return;
           } else if (artistBlacklisted) {
-           chatClient.say(broadcasterUserName, "/me At least one artist of this song is blacklisted here");
+            let link = blacklistedArtistsLink(channelid, broadcasterUserName);
+            chatClient.say(broadcasterUserName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
             return;
           } else {
             let name = searchResponse.data.tracks.items[0].name;
@@ -1729,31 +1808,54 @@ function whitelistTrack(channel_id, url, channel) {
   }
 }
 
-function blacklistTrack(channel_id, url, channel) {
+async function blacklistTrack(channel_id, url, channel) {
   const regex = /track\/([^\?]+)/; // Your regex pattern
   const match = regex.exec(url);
   if (match) {
     const trackId = match[1];
-    let sql = "INSERT INTO blacklisted_tracks(channel_id, blocked_track_id) VALUES (?, ?)";
-    pool.getConnection(function(conn_err, conn) {
-      if (conn_err) {
-        console.log(console_err);
-        return false;
-      }
-      conn.query(sql, [channel_id, trackId], (query_err, query_result) => {
-        if (query_err) {
-          if (query_err.code === "ER_DUP_ENTRY") {
-           chatClient.say(channel, "/me Track already blacklisted");
-          } else {
-            console.log(query_err);
-          }
-        } else {
-         chatClient.say(channel, "/me Track blacklisted");
-        }
-        pool.releaseConnection(conn);
-      });
+    const spotifyAuthToken = await getSpotifyToken(channel);
+    const infoRequest = {
+      method: 'GET',
+      url: 'https://api.spotify.com/v1/tracks/' + trackId
+    }
+    const axiosInstance = axios.create({
+      headers: {
+        Authorization: 'Bearer '+spotifyAuthToken,
+      },
     });
-  } else {
+    axiosInstance(infoRequest)
+      .then(async infoResponse => {
+        const songname = infoResponse.data.name;
+        let artistVal = "";
+        let artists = infoResponse.data.artists;
+        for (let i = 0; i < artists.length; i++) {
+          artistVal += artists[i].name;
+          if (i < artists.length - 1) {
+            artistVal += ", ";
+          }
+        }
+        let sql = "INSERT INTO blacklisted_tracks(channel_id, blocked_track_id, songname, artist) VALUES (?, ?, ?, ?)";
+        pool.getConnection(function(conn_err, conn) {
+          if (conn_err) {
+            console.log(console_err);
+            return false;
+          }
+          conn.query(sql, [channel_id, trackId, songname, artistVal], (query_err, query_result) => {
+            if (query_err) {
+              if (query_err.code === "ER_DUP_ENTRY") {
+                chatClient.say(channel, "/me Track already blacklisted");
+              } else {
+                console.log("Query Error while trying to blacklist trackid: " + trackId);
+                console.log(query_err);
+              }
+            } else {
+              chatClient.say(channel, "/me Track blacklisted");
+            }
+            pool.releaseConnection(conn);
+          });
+        });
+      });
+    } else {
     console.log("Could not extract trackid from url: " + url);
     return;
   }  
@@ -1779,45 +1881,22 @@ async function blacklistedUsers(channel_id, channel) {
  chatClient.say(channel, response);
 }
 
-async function blacklistedArtists(channel_id, channel) {
-  const promisePool = pool.promise();
-  let sql = "SELECT * FROM blacklisted_artists WHERE channel_id = ?";
-  const [rows,fields] = await promisePool.query(sql, [channel_id]);
-  let linkPrefix = "https://open.spotify.com/intl-de/artist/"
-
-  if (rows.length < 1) {
-   chatClient.say(channel, "/me No blacklisted Artists");
-    return;
-  }
-  let response = "/me Currently blacklisted Artists: ";
-  for (let i = 0; i < rows.length; i++) {
-    if (i > 0) {
-      response += " - " + linkPrefix + rows[i]["blocked_artist_id"];
-    } else {
-      response += linkPrefix + rows[i]["blocked_artist_id"];
-    }
-  }
- chatClient.say(channel, response);
+function blacklistedArtists(channel_id, channel) {
+  let link = "https://www.ananasmusicbot.de/channels/"+channel_id+"/blacklisted-artists?channelname=" +channel;
+  chatClient.say(channel, "/me Check all blacklisted artists here: " + link);
 }
 
-async function blacklistedTracks(channel_id, channel) {
-  const promisePool = pool.promise();
-  let sql = "SELECT * FROM blacklisted_tracks WHERE channel_id = ?";
-  const [rows,fields] = await promisePool.query(sql, [channel_id]);
-  let linkPrefix = "https://open.spotify.com/intl-de/track"
-  if (rows.length < 1) {
-   chatClient.say(channel, "/me No blacklisted Tracks");
-    return;
-  }
-  let response = "/me Currently blacklisted users: ";
-  for (let i = 0; i < rows.length; i++) {
-    if (i > 0) {
-      response += " - " + linkPrefix + rows[i]["blocked_track_id"];
-    } else {
-      response += linkPrefix + rows[i]["blocked_track_id"];
-    }
-  }
- chatClient.say(channel, response);
+function blacklistedArtistsLink(channel_id, channel) {
+  return "https://www.ananasmusicbot.de/channels/"+channel_id+"/blacklisted-artists?channelname=" +channel;
+}
+
+function blacklistedTracks(channel_id, channel) {
+  let link = "https://www.ananasmusicbot.de/channels/"+channel_id+"/blacklisted-tracks?channelname=" +channel;
+  chatClient.say(channel, "/me Check all blacklisted tracks here: " + link);
+}
+
+function blacklistedTracksLink(channel_id, channel) {
+  return "https://www.ananasmusicbot.de/channels/"+channel_id+"/blacklisted-tracks?channelname=" +channel;
 }
 
 function whitelistArtist(channel_id, url, channel) {
@@ -1848,31 +1927,46 @@ function whitelistArtist(channel_id, url, channel) {
   }
 }
 
-function blacklistArtist(channel_id, url, channel) {
+async function blacklistArtist(channel_id, url, channel) {
+  console.log("In blacklist function");
   const regex = /artist\/([^\?]+)/; // Your regex pattern
   const match = regex.exec(url);
   if (match) {
     const artistId = match[1];
-    let sql = "INSERT INTO blacklisted_artists(channel_id, blocked_artist_id) VALUES (?, ?)";
-    pool.getConnection(function(conn_err, conn) {
-      if (conn_err) {
-        console.log(console_err);
-        return false;
-      }
-      conn.query(sql, [channel_id, artistId], (query_err, query_result) => {
-        if (query_err) {
-          if (query_err.code === "ER_DUP_ENTRY") {
-           chatClient.say(channel, "/me Artist already blacklisted");
-          } else {
-            console.log("Query Error while trying to blacklist artist_id " + artistId);
-            console.log(query_err);
-          }
-        } else {
-          chatClient.say(channel, "/me Artist blacklisted");
-        }
-        pool.releaseConnection(conn);
-      });
+    const spotifyAuthToken = await getSpotifyToken(channel);
+    const infoRequest = {
+      method: 'GET',
+      url: 'https://api.spotify.com/v1/artists/' + artistId
+    }
+    const axiosInstance = axios.create({
+      headers: {
+        Authorization: 'Bearer '+spotifyAuthToken,
+      },
     });
+    axiosInstance(infoRequest)
+      .then(async infoResponse => {
+        const artistname = infoResponse.data.name;
+        let sql = "INSERT INTO blacklisted_artists(channel_id, blocked_artist_id, name) VALUES (?, ?, ?)";
+        pool.getConnection(function(conn_err, conn) {
+          if (conn_err) {
+            console.log(console_err);
+            return false;
+          }
+          conn.query(sql, [channel_id, artistId, artistname], (query_err, query_result) => {
+            if (query_err) {
+              if (query_err.code === "ER_DUP_ENTRY") {
+              chatClient.say(channel, "/me Artist already blacklisted");
+              } else {
+                console.log("Query Error while trying to blacklist artist_id " + artistId);
+                console.log(query_err);
+              }
+            } else {
+              chatClient.say(channel, "/me Artist blacklisted");
+            }
+            pool.releaseConnection(conn);
+          });
+        });
+      });
   } else {
     console.log("Could not extract artistid from url: " + url);
     return;
@@ -2310,3 +2404,66 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
         pool.releaseConnection(conn);
       });
     }
+
+async function getSpotifyToken(channel) {
+  const tokenquery = `
+      SELECT * FROM tokenstore
+      WHERE LOWER(twitchlogin) = ?
+      LIMIT 1
+  `;
+  const promisePool = pool.promise();
+  const [rows,fields] = await promisePool.query(tokenquery, [channel.toLowerCase()]);
+  if (rows.length > 0) {
+    // The first result is stored in the `results[0]` object.
+    const tokenrow = rows[0];
+    let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+    let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+    let expirationSeconds = tokenrow.spotifyexpiration;
+    let dateInMillisecs = new Date().getTime();
+    let dateInSecs = Math.round(dateInMillisecs / 1000);
+    if (dateInSecs < parseInt(expirationSeconds) -10 ) {
+      return spotifyAuthToken;
+    }
+    //Token invalid, refresh.
+    const options = {
+      hostname: 'accounts.spotify.com',
+      port: 443,
+      path: '/api/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + (new Buffer.from(process.env.SPOTIFY_CLIENT + ':' + process.env.SPOTIFY_SECRET).toString('base64'))
+      },
+    };
+    // Create the request body
+    const data = "refresh_token="+refreshToken
+    +"&grant_type=refresh_token";
+    const request = https.request(options, (response) => {
+      // Handle the response
+      let responseBody = '';
+      response.on('data', (chunk) => {
+        responseBody += chunk;
+      });
+      response.on('end', async () => {
+        let jsonBody = JSON.parse(responseBody);
+        let newAccesstoken = jsonBody.access_token;
+        let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
+        let newExpiresin = jsonBody.expires_in;
+        let dateInMillisecs = new Date().getTime();
+        let dateInSecs = Math.round(dateInMillisecs / 1000);
+        let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
+        const updateQuery = `
+            UPDATE tokenstore
+            SET spotifytoken = ?, spotifyexpiration = ?
+            WHERE LOWER(twitchlogin) = ?
+          `;
+        const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
+        return newAccesstoken;
+      });
+    });
+    // Write the request body
+    request.write(data);
+    // End the request
+    request.end();
+  }
+}

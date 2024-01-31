@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        table {
+            border: 1px solid black;
+            text-align: left;
+        }
+        td {
+            border: 1px solid black;
+        }
+        th {
+            border: 1px solid black;
+        }
+    </style>
+    <script>
+        function copyToClipboard(text) {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(text);
+            } else {
+                alert("Clipboard API is not supported.");
+            }
+        }
+      </script>
+  <title>Ananas Music Bot</title>
+</head>
+<body>
+    <h1>Blacklisted Artists of channel <%= channelname %></h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Artist</th>
+                <th>Whitelist command</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            <% for (var i = 0; i < artists.length; i++) { %>
+                <tr>
+                    <td>
+                        <%= artists[i].artist %>
+                    </td>
+                    <td>
+                        <%= artists[i].artistlink %>
+                    </td>
+                    <td style="text-align: center;">
+                        <button onclick="copyToClipboard('!wlartist <%= artists[i].artistlink %>')">
+                            <img src="/assets/copy.png" style="width: 20px;" alt="buttonpng" border="0" />
+                        </button>
+                    </td>
+                </tr>
+            <% } %>
+        </tbody>
+    </table>
+    
+</body>

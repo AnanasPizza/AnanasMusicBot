@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        table {
+            border: 1px solid black;
+            text-align: left;
+        }
+        td {
+            border: 1px solid black;
+        }
+        th {
+            border: 1px solid black;
+        }
+      </style>
+  <title>Ananas Music Bot</title>
+</head>
+<body>
+    <h1>All Channels with AnanasMusicBot</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Channelname</th>
+                <th>Blacklisted Tracks</th>
+                <th>Blacklisted Artists</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% for (var i = 0; i < channels.length; i++) { %>
+                <tr>
+                    <td>
+                        <a href="https://www.twitch.tv/<%= channels[i].channelname %>"><%= channels[i].channelname %></a>
+                    </td>
+                    <td>
+                        <a href="/channels/<%= channels[i].channelid %>/blacklisted-tracks?channelname=<%= channels[i].channelname %>">Link</a>
+                    </td>
+                    <td>
+                        <a href="/channels/<%= channels[i].channelid %>/blacklisted-artists?channelname=<%= channels[i].channelname %>">Link</a>
+                    </td>
+                </tr>
+            <% } %>
+        </tbody>
+    </table>
+    
+</body>

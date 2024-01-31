@@ -26,7 +26,8 @@ SET time_zone = "+00:00";
 CREATE TABLE `blacklisted_artists` (
   `id` int NOT NULL,
   `channel_id` int NOT NULL,
-  `blocked_artist_id` varchar(255) NOT NULL
+  `blocked_artist_id` varchar(255) NOT NULL,
+  `name` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 
 -- --------------------------------------------------------
@@ -38,7 +39,9 @@ CREATE TABLE `blacklisted_artists` (
 CREATE TABLE `blacklisted_tracks` (
   `id` int NOT NULL,
   `channel_id` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
-  `blocked_track_id` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL
+  `blocked_track_id` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
+  `songname` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
+  `artist` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 
 -- --------------------------------------------------------
