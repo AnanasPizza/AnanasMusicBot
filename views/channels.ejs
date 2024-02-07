@@ -23,6 +23,7 @@
                 <th>Channelname</th>
                 <th>Blacklisted Tracks</th>
                 <th>Blacklisted Artists</th>
+                <th>Blacklisted Users</th>
             </tr>
         </thead>
         <tbody>
@@ -36,6 +37,9 @@
                     </td>
                     <td>
                         <a href="/channels/<%= channels[i].channelid %>/blacklisted-artists?channelname=<%= channels[i].channelname %>">Link</a>
+                    </td>
+                    <td>
+                        <a href="/channels/<%= channels[i].channelid %>/blacklisted-users?channelname=<%= channels[i].channelname %>">Link</a>
                     </td>
                 </tr>
             <% } %>

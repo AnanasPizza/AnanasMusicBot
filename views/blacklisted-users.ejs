@@ -25,26 +25,26 @@
   <title>Ananas Music Bot</title>
 </head>
 <body>
-    <h1>Blacklisted Artists of channel <%= channelname %></h1>
+    <h1>Blacklisted Users of channel <%= channelname %></h1>
     <table>
         <thead>
             <tr>
-                <th>Artist</th>
+                <th>User</th>
                 <th>Whitelist command</th>
                 <th></th>
             </tr>
         </thead>
         <tbody>
-            <% for (var i = 0; i < artists.length; i++) { %>
+            <% for (var i = 0; i < users.length; i++) { %>
                 <tr>
                     <td>
-                        <%= artists[i].artist %>
+                        <a href="https://twitch.tv/<%= users[i].name %>"><%= users[i].name %></a>
                     </td>
                     <td>
-                        !wlartist <%= artists[i].artistlink %>
+                        !wluser <%= users[i].name %>
                     </td>
                     <td style="text-align: center;">
-                        <button onclick="copyToClipboard('!wlartist <%= artists[i].artistlink %>')">
+                        <button onclick="copyToClipboard('!wluser <%= users[i].name %> %>')">
                             <img src="/assets/copy.png" style="width: 20px;" alt="buttonpng" border="0" />
                         </button>
                     </td>
