@@ -3,26 +3,96 @@
 <head>
   <title>Ananas Music Bot Commands</title>
   <style>
-    h1, h2, table {
-      width: 90%;
-      padding-left: 5%;
+     body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 20px;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    h1, h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      font-weight: normal;
+    }
+
+    h1 {
+      font-size: 2em;
     }
 
     table {
-      font-size: x-large;
-    }
-    th {
+      border-collapse: collapse;
+      width: 80%;
+      margin: 0 auto;
       text-align: left;
+      transition: background-color 0.3s ease, color 0.3s ease;
     }
-    td {
-      width: 40%;
+
+    th, td {
+      padding: 10px;
+      border: 1px solid #ddd;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+
+    tr:nth-child(even) {
+      background-color: #f7f7f7;
+    }
+
+    .general-commands, .mod-commands {
+      margin-top: 40px;
+    }
+
+    /* Light mode styles */
+    .light {
+      background-color: #fff;
+      color: #000;
+    }
+
+    /* Dark mode styles */
+    .dark {
+      background-color: #222;
+      color: #fff;
+    }
+
+    /* Media query for Chromium's dark mode preference */
+    @media (prefers-color-scheme: dark) {
+      body {
+        @media (prefers-color-scheme: no-preference) {
+          /* Handle case where user's preference is "no-preference" */
+          .light {
+            display: none; /* Hide light styles when user has no preference and Chromium is in dark mode */
+          }
+        }
+      }
+    }
+
+    /* Additional styles for consistency */
+    table.light, table.dark {
+      background-color: inherit; /* Inherit background color from body */
+    }
+
+    th.light, th.dark, td.light, td.dark {
+      background-color: inherit; /* Inherit background color from body */
+      color: inherit; /* Inherit color from body */
+    }
+
+    th.light, th.dark {
+      background-color: #333; /* Adjust header background color slightly */
+    }
+
+    tr.light:nth-child(even), tr.dark:nth-child(even) {
+      background-color: #444; /* Adjust even row background color slightly */
     }
   </style>
 </head>
 <body>
   <h1>Commands</h1>
-  <h2><u>General Commands</u></h2>
-  <table>
+  <h2 class="general-commands"><u>General Commands</u></h2>
+  <table class="general-commands">
     <tr>
       <th>Command</th>
       <th>Description</th>
@@ -48,8 +118,8 @@
       <td>Check how long a song is allowed to be</td>
     </tr>
   </table>
-  <h2><u>Mod Commands</u></h2>
-  <table>
+  <h2 class="mod-commands"><u>Mod Commands</u></h2>
+  <table class="mod-commands">
     <tr>
       <th>Command</th>
       <th>Description</th>

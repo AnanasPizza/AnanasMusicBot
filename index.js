@@ -5,15 +5,19 @@ import http from 'http';
 import querystring from 'node:querystring';
 import sessions from 'express-session';
 import fs from 'fs';
-import axios from 'axios';
+import axios, { all } from 'axios';
 import mysql from 'mysql2';
 import dotenv from "dotenv";
 import { RefreshingAuthProvider } from '@twurple/auth';
 import { ChatClient } from '@twurple/chat';
+import { ApiClient } from '@twurple/api';
 import schedule from 'node-schedule';
 import bodyParser from 'body-parser';
 import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/lib.js";
 import CryptoJS from "crypto-js";
+import Filter from 'bad-words';
+import util from 'util';
+const filter = new Filter();
 
 // Notification request headers
 const TWITCH_MESSAGE_ID = 'Twitch-Eventsub-Message-Id'.toLowerCase();
@@ -32,6 +36,8 @@ const HMAC_PREFIX = 'sha256=';
 dotenv.config();
 
 const ENCRYPTION_PWD = process.env.ENCRYPTION_PWD;
+const TWITCH_CLIENT_ID            = process.env.TWITCH_CLIENT;
+const TWITCH_SECRET               = process.env.TWITCH_SECRET;
 
 const requestTimeoutMap = new Map();
 
@@ -64,6 +70,12 @@ let dbconfig = {
   enableKeepAlive: true,
   keepAliveInitialDelay: 0
 };
+
+let appAccessToken = {
+  access_token: "",
+	expires_in: 0,
+  obtained_at: Date.now()
+}
 
 const devMode = process.env.DEV_MODE === "true";
 
@@ -156,10 +168,31 @@ const authProvider = new RefreshingAuthProvider(
 
 authProvider.onRefresh(async (userId, newTokenData) => await updateToken(userId, newTokenData));
 
-const tokenData = await getTokendata();
-await authProvider.addUserForToken(tokenData, ['chat']);
+const tokenDataChat = await getChatTokendata();
+const tokenDataApi = await getApiTokendata();
+await authProvider.addUserForToken(tokenDataChat, ['chat']);
+await authProvider.addUserForToken(tokenDataApi, ['api']);
+async function getChatTokendata() {
+  const sql = 'SELECT * FROM bot_tokenstore where twitch_id = ?';
+  const promisePool = pool.promise();
+  const [rows,fields] = await promisePool.query(sql, [process.env.TWITCH_ID]);
+  let tokenData = {
+    accessToken: "",
+    refreshToken: "",
+    expiresIn: 0,
+    obtainmentTimestamp: Date.now()
+  };
+  // Iterate the results
+  rows.forEach((row) => {
+    tokenData.accessToken = CryptoJS.AES.decrypt(row["accessToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
+    tokenData.refreshToken = CryptoJS.AES.decrypt(row["refreshToken"], ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8),
+    tokenData.expiresIn = row["expiresIn"],
+    tokenData.obtainmentTimestamp = row["obtainmentTimestamp"]
+  });
+  return tokenData;
+}
 
-async function getTokendata() {
+async function getApiTokendata() {
   const sql = 'SELECT * FROM bot_tokenstore where twitch_id = ?';
   const promisePool = pool.promise();
   const [rows,fields] = await promisePool.query(sql, [process.env.TWITCH_ID]);
@@ -205,6 +238,7 @@ async function updateToken(userId, newTokenData) {
 }
 
 const chatClient = new ChatClient({ authProvider, channels: twitchIds, rejoinChannelsOnReconnect: true });
+const apiClient = new ApiClient({ authProvider });
 chatClient.connect();
 
 chatClient.onAuthenticationSuccess((text, retryCount) => {
@@ -216,6 +250,45 @@ chatClient.onAuthenticationFailure((text, retryCount) => {
   console.log("Epic Fail, could not connect");
 })
 
+
+async function getAllEventSubs() {
+  const baseUrl = 'https://api.twitch.tv/helix/eventsub/subscriptions';
+  const accessToken = await getTwitchAppAuthToken();
+  const clientId = TWITCH_CLIENT_ID;
+
+  const headers = {
+    'Authorization': `Bearer ${accessToken}`,
+    'Client-Id': clientId
+  };
+
+  let response = await axios.get(baseUrl, { headers });
+  return response.data;
+}
+
+console.log("Getting all event subs");
+let allEventSubs = await getAllEventSubs();
+console.log(util.inspect(allEventSubs, false, null, true));
+
+async function getTwitchAppAuthToken() {
+  if ((appAccessToken.obtained_at + (appAccessToken.expires_in * 1000)) < Date.now()) {
+    const url = `https://id.twitch.tv/oauth2/token`;
+    const data = new URLSearchParams({
+      client_id: TWITCH_CLIENT_ID,
+      client_secret: TWITCH_SECRET,
+      grant_type: 'client_credentials'
+    });
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    };
+    const response = await axios.post(url, data, { headers });
+    appAccessToken.access_token = response.data.access_token;
+    appAccessToken.expires_in = response.data.expires_in;
+    appAccessToken.obtained_at = Date.now();
+    return appAccessToken.access_token;
+  } else {
+    return appAccessToken.access_token;
+  }
+}
   
 app.get("/start", async (req, res) => {
   var session=req.session;
@@ -303,8 +376,8 @@ app.get('/spotifycallback', function(req, res) {
               chatClient.join(channelname);
               chatClient.say(channelname, "/me Channel Points Subscription is active now");
               res.redirect("https://ananasmusicbot.de/start");
-            } catch (error) {
-              console.log(error);
+            } catch (err) {
+              console.log(err);
               res.sendStatus(500);
             }
           } else {
@@ -323,58 +396,88 @@ app.get('/spotifycallback', function(req, res) {
 });
   
 app.post('/eventsub', async (req, res) => {
-    let secret = getSecret();
-    let message = getHmacMessage(req);
-    let hmac = HMAC_PREFIX + getHmac(secret, message);  // Signature to compare
-    
-    if (true === verifyMessage(hmac, req.headers[TWITCH_MESSAGE_SIGNATURE])) {
-        let notification = JSON.parse(req.body);
-        if (MESSAGE_TYPE_NOTIFICATION === req.headers[MESSAGE_TYPE]) {
-          // Get JSON object from body, so you can process the message.
-          // TODO: Do something with the event's data.
-          let eventtitle = notification.event.reward.title;
-          if ("channel.channel_points_custom_reward_redemption.add" === notification.subscription.type && eventtitle === "Songrequest") {
-            let userInput = notification.event.user_input;
-            let broadcasterId = notification.event.broadcaster_user_id;
-            let requestedBy = notification.event.user_name;
-            let broadcasterName = notification.event.broadcaster_user_name;
-            let blacklisted = await isUserBlacklisted(broadcasterId, requestedBy);
-            if (blacklisted) {
-              chatClient.say(broadcasterName, "/me @" + requestedBy + ", you are currently blacklisted for songrequests");
+    try {
+      let secret = getSecret();
+      let message = getHmacMessage(req);
+      let hmac = HMAC_PREFIX + getHmac(secret, message);  // Signature to compare
+      
+      if (true === verifyMessage(hmac, req.headers[TWITCH_MESSAGE_SIGNATURE])) {
+          let notification = JSON.parse(req.body);
+          if (MESSAGE_TYPE_NOTIFICATION === req.headers[MESSAGE_TYPE]) {
+            // Get JSON object from body, so you can process the message.
+            // TODO: Do something with the event's data.
+            let eventtitle = notification.event.reward.title;
+            if ("channel.channel_points_custom_reward_redemption.add" === notification.subscription.type && eventtitle === "Songrequest") {
               res.sendStatus(204);
-            } else {
-              const spotifyAuthToken = await getSpotifyToken(broadcasterName);
-              sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, broadcasterId, res);
+              let userInput = notification.event.user_input;
+              let broadcasterId = notification.event.broadcaster_user_id;
+              let requestedBy = notification.event.user_name;
+              let broadcasterName = notification.event.broadcaster_user_name;
+              console.log("Handling SR with input " + userInput + " in channel " + broadcasterName);
+              const isBroadcaster = broadcasterName.trim().toLowerCase() === requestedBy.trim().toLowerCase();
+              //const liveOnly = await getLiveOnly(null, broadcasterId);
+              //console.log("Liveonly? " + liveOnly);
+              const isChannelLive = true //await isLive(broadcasterName);
+              console.log("Is Live? " + isChannelLive);
+              console.log("Is Broadcaster? " + isBroadcaster);
+              //If Broadcaster requested, or it's not live only, or the channel is live anyways: Allow spotify action;
+              let allowSpotifyActions = isBroadcaster || isChannelLive; // || !liveOnly || ;
+  
+              if (!allowSpotifyActions) {
+                chatClient.say(broadcasterName, "/me @" + requestedBy + ", Can't request songs when channel is offline due to specific setting");
+              } else {
+                let blacklisted = await isUserBlacklisted(broadcasterId, requestedBy);
+                if (blacklisted) {
+                  chatClient.say(broadcasterName, "/me @" + requestedBy + ", you are currently blacklisted for songrequests");
+                } else {
+                  const spotifyAuthToken = await getSpotifyToken(broadcasterName);
+                  sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, broadcasterId);
+                }
+              }            
+            } else if ("channel.channel_points_custom_reward_redemption.add" === notification.subscription.type && eventtitle === "Skip Song") {
               res.sendStatus(204);
+              let broadcasterId = notification.event.broadcaster_user_id;
+              let requestedBy = notification.event.user_name;
+              let broadcasterName = notification.event.broadcaster_user_name;
+              console.log("Handling SkipSong in channel " + broadcasterName);
+              const isBroadcaster = broadcasterName.trim().toLowerCase() === requestedBy.trim().toLowerCase();
+              const liveOnly = await getLiveOnly(null, broadcasterId);
+              console.log("Liveonly? " + liveOnly);
+              const isChannelLive = true //await isLive(broadcasterName);
+              console.log("Is Live? " + isChannelLive);
+              console.log("Is Broadcaster? " + isBroadcaster);
+              //If Broadcaster requested, or it's not live only, or the channel is live anyways: Allow spotify action;
+              let allowSpotifyActions = isBroadcaster || !liveOnly || isChannelLive;
+              if (!allowSpotifyActions) {
+                chatClient.say(broadcasterName, "/me @" + requestedBy + ", Can't skip songs when channel is offline due to specific setting");
+              } else {
+                const spotifyAuthToken = await getSpotifyToken(broadcasterName);
+                skipSong(spotifyAuthToken, broadcasterName);
+              }
             }
-          } else if ("channel.channel_points_custom_reward_redemption.add" === notification.subscription.type && eventtitle === "Skip Song") {
-            let broadcasterId = notification.event.broadcaster_user_id;
-            let broadcasterName = notification.event.broadcaster_user_name;
-            const spotifyAuthToken = await getSpotifyToken(broadcasterName);
-            skipSong(spotifyAuthToken, broadcasterName, res);
-            res.sendStatus(204);
-          } else {
-            res.sendStatus(204);
           }
-        }
-        else if (MESSAGE_TYPE_VERIFICATION === req.headers[MESSAGE_TYPE]) {
-          res.set('Content-Type', 'text/plain').status(200).send(notification.challenge);
-        }
-        else if (MESSAGE_TYPE_REVOCATION === req.headers[MESSAGE_TYPE]) {
-            res.sendStatus(204);
-            console.log(`${notification.subscription.type} notifications revoked!`);
-            console.log(`reason: ${notification.subscription.status}`);
-            console.log(`condition: ${JSON.stringify(notification.subscription.condition, null, 4)}`);
-        }
-        else {
-            res.sendStatus(204);
-            console.log(`Unknown message type: ${req.headers[MESSAGE_TYPE]}`);
-        }
+          else if (MESSAGE_TYPE_VERIFICATION === req.headers[MESSAGE_TYPE]) {
+            res.set('Content-Type', 'text/plain').status(200).send(notification.challenge);
+          }
+          else if (MESSAGE_TYPE_REVOCATION === req.headers[MESSAGE_TYPE]) {
+              res.sendStatus(204);
+              console.log(`${notification.subscription.type} notifications revoked!`);
+              console.log(`reason: ${notification.subscription.status}`);
+              console.log(`condition: ${JSON.stringify(notification.subscription.condition, null, 4)}`);
+          }
+          else {
+              res.sendStatus(204);
+              console.log(`Unknown message type: ${req.headers[MESSAGE_TYPE]}`);
+          }
+      }
+      else {
+          console.log('403');
+          res.sendStatus(403);
+      }
+    } catch (err) {
+      res.sendStatus(204);
     }
-    else {
-        console.log('403');
-        res.sendStatus(403);
-    }
+    
 });
   
 app.post("/create-subscription", async (req, res) => {
@@ -422,11 +525,11 @@ app.post("/create-subscription", async (req, res) => {
   request.end();
 });
 
-async function skipSong(spotifyAuthToken, broadcasterUserName, res) {
+async function skipSong(spotifyAuthToken, broadcasterUserName) {
   const axiosInstance = axios.create({
-  headers: {
-      Authorization: 'Bearer '+spotifyAuthToken,
-  },
+    headers: {
+        Authorization: 'Bearer '+spotifyAuthToken,
+    },
   });
 
   const skipRequest = {
@@ -441,9 +544,6 @@ async function skipSong(spotifyAuthToken, broadcasterUserName, res) {
     .catch(error => {
       console.log(error);
   });
-  if (res !== undefined && res !== null) {
-    res.sendStatus(204);
-  }
 }
 
 async function skipBackSong(spotifyAuthToken, broadcasterUserName) {
@@ -681,7 +781,7 @@ if (!devMode) {
   var httpsServer = https.createServer(options, app);
   httpsServer.listen(443);
 }
-httpServer.listen(80);
+httpServer.listen(81);
 
 
 
@@ -694,7 +794,7 @@ const shutdownJob = schedule.scheduleJob('0 1-23/2 * * * ', function(){
 });
 
 //End Servercode
-chatClient.onMessage((channel, user, text, msg) => {
+chatClient.onMessage(async (channel, user, text, msg) => {
   const userInfo = msg.userInfo;
   const channel_id = msg.channelId;
   const isMod = userInfo.isMod;
@@ -707,7 +807,7 @@ chatClient.onMessage((channel, user, text, msg) => {
   }
 
   if(user === nick || !text.startsWith('!')) return;
-  
+
   const args = text.split(' ');
   let command = (args[0]);
 
@@ -724,6 +824,21 @@ chatClient.onMessage((channel, user, text, msg) => {
       }
     }
   }
+
+  const liveOnly = await getLiveOnly(null, channel_id);
+  console.log("Liveonly? " + liveOnly);
+  let isChannelLive = true;
+  if (liveOnly) {
+    isChannelLive = true //await isLive(channel)
+  }
+  console.log("Is Live? " + isChannelLive);
+  console.log("Is Broadcaster? " + isBroadcaster);
+  //If Broadcaster requested, or it's not live only, or the channel is live anyways: Allow spotify action;
+  let allowSpotifyActions = isBroadcaster || !liveOnly || isChannelLive;
+
+  console.log("Allow Spotify Actions? " + allowSpotifyActions);
+
+  console.log("Handling command " + command + " in channel " + channel);
 
   let commandMap = new Map();
   commandMap.set(command, currTime);
@@ -748,9 +863,11 @@ chatClient.onMessage((channel, user, text, msg) => {
       break;
     }
     case "!resume": {
-      if (isModUp) {
+      if (isModUp && allowSpotifyActions) {
         executeSpotifyAction(channel, "resume");
         break;
+      } else if (!allowSpotifyActions && isModUp) {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
       }
     } case "!bluser": {
       if (isModUp) {
@@ -832,6 +949,7 @@ chatClient.onMessage((channel, user, text, msg) => {
       }
       break;
     } case "!volume": {
+      if (allowSpotifyActions) {
         if (args.length < 2) {
           executeSpotifyAction(channel, channel_id, "get_volume", args);
         } else {
@@ -839,15 +957,23 @@ chatClient.onMessage((channel, user, text, msg) => {
                 break;
             }
             executeSpotifyAction(channel, channel_id, "volume", args);
-        }
-        break;
+        }  
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     }
     case "!playlist": {
-      executeSpotifyAction(channel, channel_id, "playlist", args);
+      if (allowSpotifyActions) {
+        executeSpotifyAction(channel, channel_id, "playlist", args);
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
       break;
     }
     case "!q":
     case "!queue" : {
+      if (allowSpotifyActions) {
         //Only one additional argument provided and that is a number between 1 and 10.
         let argIsNumberOneToTen = (args.length == 2 && isNumberFromOneToTen(args[1])) ? true : false;
 
@@ -864,10 +990,14 @@ chatClient.onMessage((channel, user, text, msg) => {
         } else {
           executeSpotifyAction(channel, channel_id, "queue", null);
         }
-        break;
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     }
     case "!rq":
     case "!rqueue" : {
+      if (allowSpotifyActions) {
         //Only one additional argument provided and that is a number between 1 and 10.
         let argIsNumberOneToTen = (args.length == 2 && isNumberFromOneToTen(args[1])) ? true : false;
         //More than one argument provided or one additional argument that is not a number between 1 and 10.
@@ -877,13 +1007,24 @@ chatClient.onMessage((channel, user, text, msg) => {
         } else {
           executeSpotifyAction(channel, channel_id, "reversequeue", null);
         }
-        break;
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     }
     case "!song":
+      if (allowSpotifyActions) {
         executeSpotifyAction(channel, channel_id, "song", null);
-        break;
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     case "!songlink":
-      executeSpotifyAction(channel, channel_id, "songlink", null);
+      if (allowSpotifyActions) {
+        executeSpotifyAction(channel, channel_id, "songlink", null);
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
       break;
     case "!maxlength":
       //Only one additional argument provided and that is a number between 1 and 10.
@@ -904,30 +1045,68 @@ chatClient.onMessage((channel, user, text, msg) => {
         getMaxSongLength(channel, channel_id);
       }
       break;
+    case "!liveonly":
+      //Only one additional argument provided and that is either "on" or "off"
+      if (isBroadcaster) {
+        if (args.length > 1) {
+          try {
+            let param = args[1].trim();
+            if (param.toLowerCase() === "on") {
+              turnOnLiveOnly(channel, channel_id);  
+            } else if (param.toLowerCase() === "off") {
+              turnOffLiveOnly(channel, channel_id);
+            }
+          } catch (error) {
+            console.log(error);
+            chatClient.say(channel, "Invalid argument provided. Needs 'on' or 'off'");
+          }
+        } else {
+          getLiveOnly(channel, channel_id);
+        }
+      } else {
+        getLiveOnly(channel, channel_id);
+      }
+      break;
     case "!play":
+      if (allowSpotifyActions) {
         if (isModUp && args.length >= 2) {
           executeSpotifyAction(channel, channel_id, "play", args); 
         } else if (isModUp) {
           executeSpotifyAction(channel, channel_id, "resume", null); 
-        }
-        break;
+        } 
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     case "!pause":
+      if (allowSpotifyActions) {  
         if (isModUp) {
           executeSpotifyAction(channel, channel_id, "pause", null);  
         }
-        break;
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     case "!next":
     case "!skip":
+      if (allowSpotifyActions) {
         if (isModUp) {
             executeSpotifyAction(channel, channel_id, "skip", null);
         }
-        break;
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     case "!previous":
     case "!skipback":
-          if (isModUp) {
-              executeSpotifyAction(channel, channel_id, "skipback", null);
-          }
-          break;
+      if (allowSpotifyActions) {
+        if (isModUp) {
+            executeSpotifyAction(channel, channel_id, "skipback", null);
+        }
+      } else {
+        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+      }
+      break;
     case "!ircbot": {
       chatClient.say(channel, process.env.VERSION + " Bot is here!");
       break;
@@ -941,7 +1120,7 @@ chatClient.onMessage((channel, user, text, msg) => {
 
 
 //Function for channelpoint subscription
-async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, channelId, res) {
+async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, channelId) {
   const regex = /track\/([^\?]+)/; // Your regex pattern
     
   let requestUri = "spotify:track:";
@@ -951,6 +1130,10 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
     },
   });
   if (userInput.startsWith('https://')) {
+    if (!userInput.toUpperCase().includes('SPOTIFY')) {
+      chatClient.say(broadcasterName, "/me @"+ requestedBy+", Only Spotify links please");
+      return;
+    }
     const match = regex.exec(userInput);
     
     if (match) {
@@ -958,7 +1141,6 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
       let songBlacklisted = await isTrackBlacklisted(channelId, trackId);
       if (songBlacklisted) {
         chatClient.say(broadcasterName, "/me @"+ requestedBy+", This song is blacklisted here");
-        res.sendStatus(204);
       } else {
         const infoRequest = {
           method: 'GET',
@@ -972,14 +1154,12 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
             const maxSongLength = await getMaxSongLength(null, channelId);
             if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
               chatClient.say(broadcasterName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
-              res.sendStatus(204);
               return;
             }
             let artistBlacklisted = await isArtistBlacklisted(channelId, artists);
             if (artistBlacklisted) {
               let link = blacklistedArtistsLink(channelId, broadcasterName);
               chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
-              res.sendStatus(204);
               return;
             }
             const artist = infoResponse.data.artists[0].name;
@@ -993,30 +1173,33 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
             };
             axiosInstance(request)
               .then(response => {
-                chatClient.say(broadcasterName, "/me Added '" + songname + "' by '" + artist + "' to Spotify Queue, @" + requestedBy);
-                  res.sendStatus(204);
+                chatClient.say(broadcasterName, filter.clean("/me Added '" + songname + "' by '" + artist + "' to Spotify Queue, @" + requestedBy));
+                  return;
                 })
                 .catch((queueError) => {
                   //if (error instanceof AxiosError) {
-                  res.sendStatus(204);
+                  console.log(queueError);
+                  return;
                 });
             })
             .catch(infoerror => {
-              res.sendStatus(204);
+              console.log(infoerror);
+              return;
             });
         }
       } else {
         chatClient.say(broadcasterName, "/me Could not extract trackid from url @"+requestedBy);
-        res.sendStatus(204);
+        return;
       }
   } else {
+    console.log("Searching for song: " + userInput);
     const searchRequest = {
       method: 'GET',
       url: 'https://api.spotify.com/v1/search',
       params: {
         q: userInput,
         type: 'track',
-        limit: 1
+        limit: 10
       }
     }
     axiosInstance(searchRequest)
@@ -1027,7 +1210,6 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
           const maxSongLength = await getMaxSongLength(null, channelId);
           if (maxSongLength !== null && (maxSongLength * 1000) < duration_ms) {
             chatClient.say(broadcasterName, "/me Song is too long. Max. song length is " + maxSongLength + " seconds");
-            res.sendStatus(204);
             return;
           }
           let trackId = searchResponse.data.tracks.items[0].id;
@@ -1036,11 +1218,11 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
           let artistBlacklisted = await isArtistBlacklisted(channelId, artists);
           if (songBlacklisted) {
             chatClient.say(broadcasterName, "/me @"+ requestedBy+", This song is blacklisted here");
-            res.sendStatus(204);
+            return;
           } else if (artistBlacklisted) {
             let link = blacklistedArtistsLink(channelId, broadcasterName);
             chatClient.say(broadcasterName, "/me At least one artist of this song is blacklisted here. Check all blacklisted artists here: " + link);
-            res.sendStatus(204);
+            return;
           } else {
             let name = searchResponse.data.tracks.items[0].name;
             let artist = searchResponse.data.tracks.items[0].artists[0].name;
@@ -1054,26 +1236,30 @@ async function sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, req
             };
             axiosInstance(queueRequest)
               .then(queueResponse => {
-                chatClient.say(broadcasterName, "/me Added '"+ name + "' by '" + artist + "' to Spotify Queue, @"+requestedBy);
-                res.sendStatus(204);
+                chatClient.say(broadcasterName, filter.clean("/me Added '"+ name + "' by '" + artist + "' to Spotify Queue, @"+requestedBy));
+                return;
               })
               .catch(queueError => {
+                chatClient.say(broadcasterName, "/me Could not add song to queue");
+                console.log("Error for userinput: " + userInput + " in channel " + broadcasterName);
                 console.log(queueError);
-                res.sendStatus(204);
+                return;
               });
           }
         } else {
           chatClient.say(broadcasterName, "/me Could not find song");
-          res.sendStatus(204);
+          return;
         }
         
       } catch (err) {
         chatClient.say(broadcasterName, "/me Could not find song on Spotify");
-        res.sendStatus(204);
+        return;
       }
     })
     .catch(searchError => {
-      res.sendStatus(204);
+      chatClient.say(broadcasterName, "/me Could not find song on Spotify");
+      console.log(searchError);
+      return;
     });
   }
 }
@@ -1101,6 +1287,7 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
         let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
         if(!hasActiveDevice) {
           chatClient.say(broadcasterUserName, "/me No active device.");
+          //TODO: Queue internally if stream is live. 
           return;
         }
         if (isPrivate) {
@@ -1109,6 +1296,10 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
         }
       
         if (userInput.startsWith('https://')) {
+          if (!userInput.toUpperCase().includes('SPOTIFY')) {
+            chatClient.say(broadcasterUserName, "/me Only Spotify links please");
+            return;
+          }
           const match = regex.exec(userInput);
           if (match) {
             const trackId = match[1];   // The value captured in the first capture group
@@ -1149,7 +1340,7 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
                 };
                 axiosInstance(request)
                   .then(response => {
-                   chatClient.say(broadcasterUserName, "/me Added '" + songname + "' by '" + artist + "' to Queue");
+                   chatClient.say(broadcasterUserName, filter.clean("/me Added '" + songname + "' by '" + artist + "' to Queue"));
                   })
                   .catch((queueError) => {
                     console.log(queueError);
@@ -1168,7 +1359,7 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
             params: {
               q: userInput,
               type: 'track',
-              limit: 1
+              limit: 10
             }
           }
           axiosInstance(searchRequest)
@@ -1197,6 +1388,7 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
                 }
       
                 let name = searchResponse.data.tracks.items[0].name;
+                let artistString = getArtistsString(searchResponse.data.tracks.items[0].artists)
                 requestUri += trackId;
                 const queueRequest = {
                   method: 'POST',
@@ -1207,7 +1399,7 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
                 };
                 axiosInstance(queueRequest)
                   .then(queueResponse => {
-                   chatClient.say(broadcasterUserName, "/me Added '"+ name + "' to Queue");
+                   chatClient.say(broadcasterUserName, "/me Added '"+ name + "' by " + artistString + " to Queue");
                   })
                   .catch(queueError => {
                     console.log(queueError);
@@ -1225,7 +1417,11 @@ async function addSongToQueue(spotifyAuthToken, broadcasterUserName, channelid, 
             console.log(searchError);
           });
         }
-      });
+      })
+      .catch(isPlayingError => {
+        console.log(isPlayingError);
+        chatClient.say(broadcasterUserName, "/me No device is playing right now");
+      });;
 }
 
 function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
@@ -1569,7 +1765,7 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
       params: {
         q: userInput,
         type: 'track',
-        limit: 1
+        limit: 10
       }
     }
     axiosInstance(searchRequest)
@@ -1596,6 +1792,7 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
             return;
           } else {
             let name = searchResponse.data.tracks.items[0].name;
+            let artistString = getArtistsString(searchResponse.data.tracks.items[0]);
             requestUri += trackId;
             const innerRequestBody = {
               uris : [requestUri]
@@ -1603,7 +1800,7 @@ async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput)
             axiosInstance
               .put('https://api.spotify.com/v1/me/player/play', innerRequestBody)
               .then(playResponse => {
-               chatClient.say(broadcasterUserName, "/me Now playing '"+ name + "'");
+               chatClient.say(broadcasterUserName, filter.clean("/me Now playing '"+ name + "' by " + artistString));
               })
               .catch(playError => {
                 console.log(playError);
@@ -1869,7 +2066,7 @@ function mode(spotifyAuthToken, broadcasterUserName, userInput) {
 function getSong(spotifyAuthToken, broadcasterUserName) {
     const axiosInstance = axios.create({
         headers: {
-          Authorization: 'Bearer '+spotifyAuthToken,
+          Authorization: 'Bearer '+ spotifyAuthToken,
         },
     });
     
@@ -1900,7 +2097,8 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
 
         let progressString = currentTime +" / " + totalTime;
         if (isPlaying && songItem != null) {
-          responseStr += "'" + songItem.name + "' by " + "'" +songItem.artists[0].name + "'";
+          let artistsString = getArtistsString(songItem.artists);
+          responseStr += "'" + songItem.name + "' by " + artistsString;
           responseStr += " (" + progressString +")";
           if (songResponse.data.device !== undefined && songResponse.data.device.volume_percent !== undefined) {
             responseStr += " 🔊 " + songResponse.data.device.volume_percent + "%"
@@ -1912,8 +2110,21 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     })
     .catch(error => {
         console.log("Error getting song: " + error);
-       chatClient.say(broadcasterUserName, "Could not get currently playing song");
+        chatClient.say(broadcasterUserName, "Could not get currently playing song");
     });
+  }
+
+  function getArtistsString(artists) {
+    if (artists.length === 1) {
+      return "'" +artists[0].name + "'";
+    } else {
+      let result = "";
+      for (let i = 0; i < artists.length; i++) {
+        result += artists[i].name + ", ";
+      }
+      result = result.slice(0,-2);
+      return result;
+    }
   }
 
   function getSonglink(spotifyAuthToken, broadcasterUserName) {
@@ -1958,7 +2169,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
         } else {
           responseStr = "/me No song is played currently";
         }
-        chatClient.say(broadcasterUserName, responseStr);
+        chatClient.say(broadcasterUserName, filter.clean(responseStr));
     })
     .catch(error => {
         console.log("Error getting song: " + error);
@@ -2100,6 +2311,98 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     return null;
   }
 
+  function turnOnLiveOnly(channel, channel_id) {
+    let sql = "INSERT INTO channel_settings(channel_id, settings_key, settings_val) VALUES (?, ?, ?)";
+    pool.getConnection(function(conn_err, conn) {
+      if (conn_err) {
+        console.log(console_err);
+        return false;
+      }
+      conn.query(sql, [channel_id, "live_only", "ON"], (query_err, query_result) => {
+        if (query_err) {
+          if (query_err.code === "ER_DUP_ENTRY") {
+            let updateSql = "UPDATE channel_settings SET settings_val = ? WHERE channel_id = ? AND settings_key = ?";
+            conn.query(updateSql, ["ON", channel_id, "live_only"], (new_query_err, new_query_result) => {
+              if (new_query_err) {
+                chatClient.say(channel, "/me Error when updating value");
+              } else {
+                chatClient.say(channel, "/me Mode is now set to live only");
+              }
+            });
+          } else {
+            console.log("Error when inserting settings value");
+            console.log(query_err);
+          }
+        } else {
+          chatClient.say(channel, "/me Mode is now set to live only");
+        }
+        pool.releaseConnection(conn);
+      });
+    });  
+  }
+
+  function turnOffLiveOnly(channel, channel_id) {
+    let sql = "INSERT INTO channel_settings(channel_id, settings_key, settings_val) VALUES (?, ?, ?)";
+    pool.getConnection(function(conn_err, conn) {
+      if (conn_err) {
+        console.log(console_err);
+        return false;
+      }
+      conn.query(sql, [channel_id, "live_only", "OFF"], (query_err, query_result) => {
+        if (query_err) {
+          if (query_err.code === "ER_DUP_ENTRY") {
+            let updateSql = "UPDATE channel_settings SET settings_val = ? WHERE channel_id = ? AND settings_key = ?";
+            conn.query(updateSql, ["OFF", channel_id, "live_only"], (new_query_err, new_query_result) => {
+              if (new_query_err) {
+                chatClient.say(channel, "/me Error when updating value");
+              } else {
+                chatClient.say(channel, "/me Mode is not set to live only anymore");
+              }
+            });
+          } else {
+            console.log("Error when inserting settings value");
+            console.log(query_err);
+          }
+        } else {
+          chatClient.say(channel, "/me Mode is not set to live only anymore");
+        }
+        pool.releaseConnection(conn);
+      });
+    });  
+  }
+
+  async function getLiveOnly(channel, channel_id) {
+    const promisePool = pool.promise();
+    let sql = "SELECT * FROM channel_settings WHERE channel_id = ? AND settings_key = ?";  
+    const [rows,fields] = await promisePool.query(sql, [channel_id, "live_only"]);
+    if (rows.length >= 1) {
+      let row = rows[0];
+      let val = row["settings_val"];
+      if (val.toLowerCase().trim() === "on") {
+        if (channel !== null) {
+          chatClient.say(channel, "/me Mode is currently set to live only");
+        }
+        return true;
+      } else if (val.toLowerCase().trim() === "off") {
+        if (channel !== null) {
+          chatClient.say(channel, "/me Mode is currently not set to live only");  
+        }
+        return false;
+      } else {
+        console.log("Value for live only currently set to " + val + ". Thats not a valid option");
+        if (channel !== null) {
+          chatClient.say(channel, "/me Something went wrong");
+        }
+        return false;
+      }
+    }
+    if (channel !== null) {
+      chatClient.say(channel, "/me Mode is currently not set. Default: Off");
+    }
+    return false;
+  }
+
+
   async function executeSpotifyAction(channel, channelid, action, args) {
     let songRequestFromArgs = "";
     let additionalArg = null;
@@ -2109,6 +2412,8 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
       songRequestFromArgs = filteredArray.join(' ');
     }
     const spotifyToken = await getSpotifyToken(channel);
+    console.log("Got spotify token: " + spotifyToken);
+    console.log("Now executing spotify action");
     switch(action) {
         case "add":
             addSongToQueue(spotifyToken, channel, channelid, songRequestFromArgs);
@@ -2163,6 +2468,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     }
 
 async function getSpotifyToken(channel) {
+  console.log("Getting spotify token for channel " + channel);
   const tokenquery = `
       SELECT * FROM tokenstore
       WHERE LOWER(twitchlogin) = ?
@@ -2173,64 +2479,87 @@ async function getSpotifyToken(channel) {
   if (rows.length > 0) {
     // The first result is stored in the `results[0]` object.
     const tokenrow = rows[0];
+    console.log(tokenrow);
     let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
     let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
     let expirationSeconds = tokenrow.spotifyexpiration;
     let dateInMillisecs = new Date().getTime();
     let dateInSecs = Math.round(dateInMillisecs / 1000);
-    if (dateInSecs < parseInt(expirationSeconds) -10 ) {
+    if (dateInSecs < parseInt(expirationSeconds) -20 ) {
       return spotifyAuthToken;
     }
 
     let sql = "SELECT * FROM spotify_instance where id = ?";
-    const [spotify_rows,spotify_fields] = await promisePool.query(sql, [tokenrow.spotify_instance_id]);
     console.log("Query database for spotify instance client id and secret");
+    const [spotify_rows,spotify_fields] = await promisePool.query(sql, [tokenrow.spotify_instance_id]);
+    console.log(spotify_rows);
     if (spotify_rows.length > 0) {
       const spotifyrow = spotify_rows[0];
-      console.log(spotifyrow);
-      //Token invalid, refresh.
-      const options = {
-        hostname: 'accounts.spotify.com',
-        port: 443,
-        path: '/api/token',
+      console.log("SpotifyRow: " + spotifyrow);
+      
+
+      let res = await axios({
+        url: 'https://accounts.spotify.com/api/token',
         method: 'POST',
+        port: 443,
+        timeout: 8000,
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': 'Basic ' + (new Buffer.from(spotifyrow.client_id + ':' + spotifyrow.client_secret).toString('base64'))
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: 'Basic ' + (new Buffer.from(spotifyrow.client_id + ':' + spotifyrow.client_secret).toString('base64'))
         },
-      };
-      // Create the request body
-      const data = "refresh_token="+refreshToken
-      +"&grant_type=refresh_token";
-      const request = https.request(options, (response) => {
-        // Handle the response
-        let responseBody = '';
-        console.log(options);
-        response.on('data', (chunk) => {
-          responseBody += chunk;
-        });
-        response.on('end', async () => {
-          let jsonBody = JSON.parse(responseBody);
-          console.log(responseBody);
-          let newAccesstoken = jsonBody.access_token;
-          let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
-          let newExpiresin = jsonBody.expires_in;
-          let dateInMillisecs = new Date().getTime();
-          let dateInSecs = Math.round(dateInMillisecs / 1000);
-          let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
-          const updateQuery = `
-              UPDATE tokenstore
-              SET spotifytoken = ?, spotifyexpiration = ?
-              WHERE LOWER(twitchlogin) = ?
-            `;
-          const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
-          return newAccesstoken;
-        });
-      });
-      // Write the request body
-      request.write(data);
-      // End the request
-      request.end();
+        data: {
+          'refresh_token': refreshToken,
+          'grant_type': "refresh_token"
+        }
+      })
+      console.log(res.data);
+      let newAccesstoken = res.data.access_token;
+      let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
+      let newExpiresin = res.data.expires_in;
+      let dateInMillisecs = new Date().getTime();
+      let dateInSecs = Math.round(dateInMillisecs / 1000);
+      let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
+      const updateQuery = `
+          UPDATE tokenstore
+          SET spotifytoken = ?, spotifyexpiration = ?
+          WHERE LOWER(twitchlogin) = ?
+        `;
+      console.log("Updating with query: " + updateQuery);
+      const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
+      return newAccesstoken;
     }
+  }
+}
+
+async function isLive(channel) {
+  const baseUrl = 'https://api.twitch.tv/helix';
+  const token = await authProvider.getAccessTokenForIntent('chat');
+  console.log(token);
+  try {
+    // Create the authorization header
+    const headers = {
+      'Client-ID': clientId,
+      'Authorization': `Bearer ${token.accessToken}`
+    };
+
+    // Make the GET request to the streams endpoint
+    const response = await axios.get(`${baseUrl}/streams`, {
+      headers,
+      params: {
+        user_login: channel
+      }
+    });
+
+    // Check if the channel is live based on the response data
+    if (response.data.data.length > 0) {
+      console.log(`${channel} is live!`);
+      return true;
+    } else {
+      console.log(`${channel} is not live.`);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error:', error);
+    return true;
   }
 }
