@@ -17,6 +17,8 @@ import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/li
 import CryptoJS from "crypto-js";
 import Filter from 'bad-words';
 import util from 'util';
+import qs from 'qs';
+import cookieParser from 'cookie-parser';
 const filter = new Filter();
 
 // Notification request headers
@@ -55,6 +57,7 @@ app.use(express.raw({
 app.use(bodyParser.urlencoded({ extended: true }));
 
 app.use('/', express.static('public'));
+app.use(cookieParser());
 
 let dbconfig = {
   host: process.env.DB_HOST,
@@ -265,9 +268,109 @@ async function getAllEventSubs() {
   return response.data;
 }
 
-console.log("Getting all event subs");
-let allEventSubs = await getAllEventSubs();
-console.log(util.inspect(allEventSubs, false, null, true));
+async function removeDisabledWebhooks(disabledWebhooks) {
+  for (var entry of disabledWebhooks.entries()) {
+    var key = entry[0], value = entry[1];
+    for (let i = 0; i < value.length; i++) {
+      console.log("Removing failed webhook " + value[i] + " for channelid " + key);
+      await deleteWebhook(value[i]);
+    }
+  }
+}
+
+async function getTempAuthTokenByCode(code) {
+  const data = {
+    client_id: process.env.TWITCH_CLIENT,
+    client_secret: process.env.TWITCH_SECRET,
+    code: code,
+    grant_type: 'authorization_code',
+    redirect_uri: process.env.TWITCH_REDIRECT_URI
+  };
+  
+  let result = await axios.post('https://id.twitch.tv/oauth2/token', data, {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+  return result.data;
+}
+
+async function getUserInfoByToken(oauthToken) {
+  let result = await axios.get('https://api.twitch.tv/helix/users', {
+    headers: {
+      'Authorization': 'Bearer ' + oauthToken,
+      'Client-ID': process.env.TWITCH_CLIENT
+    }
+  });
+  return result.data;
+}
+
+async function deleteWebhook(webhookId) {
+  const baseUrl = 'https://api.twitch.tv/helix/eventsub/subscriptions?id=';
+    const accessToken = await getTwitchAppAuthToken();
+    const clientId = TWITCH_CLIENT_ID;
+    const url = baseUrl + webhookId;
+    const headers = {
+      'Authorization': `Bearer ${accessToken}`,
+      'Client-Id': clientId
+    };
+    try {
+      const response = await axios.delete(url, {headers});
+      if (response.data.status === 404) {
+        console.log("Already deleted");
+      } else {
+        console.log(response.data);
+      }
+    } catch(err) {
+      console.log(err.response.data);
+      if (err.response.data.status === 404) {
+        console.log("Already deleted");
+      } else {
+        console.log("Error when deleting webhook:\n"+err.response);
+      }
+    }
+}
+
+async function keepSubscriptionsAlive() {
+  console.log("Getting all event subs");
+  let allEventSubs = await getAllEventSubs();
+  const eventSubsData = allEventSubs.data;
+  console.log(util.inspect(allEventSubs, false, null, true));
+  let enabledTwitchIds = [];
+  let disabledTwitchIds = [];
+  let disabledWebhooks = new Map();
+  for (let y = 0; y < eventSubsData.length; y++) {
+    let eventSub = eventSubsData[y];
+    if (eventSub.status === 'enabled') {
+      enabledTwitchIds.push(eventSub.condition.broadcaster_user_id);
+      console.log("Eventsub enabled for channelid " + eventSub.condition.broadcaster_user_id);
+    } else if (eventSub.status === 'notification_failures_exceeded') {
+      disabledTwitchIds.push(eventSub.condition.broadcaster_user_id);
+      if (disabledWebhooks.has(eventSub.condition.broadcaster_user_id)) {
+        let entry = disabledWebhooks.get(eventSub.condition.broadcaster_user_id);
+        entry.push(eventSub.id);
+        disabledWebhooks.set(eventSub.condition.broadcaster_user_id, entry);
+      } else {
+        let entry = [eventSub.id];
+        disabledWebhooks.set(eventSub.condition.broadcaster_user_id, entry);
+      }
+      console.log("Got disabled eventsub for channelid " + eventSub.condition.eventSub.condition.broadcaster_user_id);
+      chatClient.say("ananasmusicbot", "EventSub for channel with id " + eventSub.condition.broadcaster_user_id + " not active anymore. Trying to refresh");
+    }
+  }
+  disabledTwitchIds = disabledTwitchIds.filter(n => !enabledTwitchIds.includes(n));
+  console.log(disabledTwitchIds);
+  console.log("Trying to refresh subscription call.")
+  let appToken = await getAppAccessToken();
+  console.log("New token retrieved: " + appToken);
+  for (let j = 0; j < disabledTwitchIds.length; j++) {
+    let id = disabledTwitchIds[j];
+    //let twitchToken = await getTwitchTokenByChannelId(id);
+    //executeSubscriptionCall(twitchToken, id);
+    executeSubscriptionCall(appToken, id);
+  }
+  removeDisabledWebhooks(disabledWebhooks);
+}
 
 async function getTwitchAppAuthToken() {
   if ((appAccessToken.obtained_at + (appAccessToken.expires_in * 1000)) < Date.now()) {
@@ -479,6 +582,25 @@ app.post('/eventsub', async (req, res) => {
     }
     
 });
+
+async function getAppAccessToken() {
+  try {
+    const response = await axios.post('https://id.twitch.tv/oauth2/token', 
+      `client_id=${process.env.TWITCH_CLIENT}&client_secret=${process.env.TWITCH_SECRET}&grant_type=client_credentials`,   
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'   
+        }
+      }
+    );
+    return response.data.access_token; 
+  } catch (error) {
+    // Handle errors appropriately, maybe redirect or log
+    console.error('Error fetching access token:', error);
+    // You might want to re-throw the error or return a specific value to indicate failure
+    throw error; 
+  }
+}
   
 app.post("/create-subscription", async (req, res) => {
   const broadcasterUserId = req.body.broadcaster_user_id;
@@ -486,6 +608,10 @@ app.post("/create-subscription", async (req, res) => {
   const session = req.session;
   session.broadcasterId = broadcasterUserId;
   session.broadcasterName = broadcasterName;
+  const accesstoken = await getAppAccessToken();
+  console.log(accesstoken);
+  executeSubscriptionCallWrapper(accesstoken, broadcasterUserId, res);
+  /*
   const options = {
     hostname: 'id.twitch.tv',
     port: 443,
@@ -512,17 +638,18 @@ app.post("/create-subscription", async (req, res) => {
     response.on('end', () => {
       let jsonBody = JSON.parse(responseBody);
       let accesstoken = jsonBody.access_token;
-      executeSubscriptionCall(accesstoken, broadcasterUserId, res);
+      executeSubscriptionCallWrapper(accesstoken, broadcasterUserId, res);
     });
   });
 
   request.on('error', function(err) {
-    res.redirect('https://ananasmusicbot.de/start');
+    res.redirect('https://ananasmusicbot.de/error');
   });
   // Write the request body
   request.write(data);
   // End the request
   request.end();
+  */
 });
 
 async function skipSong(spotifyAuthToken, broadcasterUserName) {
@@ -567,7 +694,8 @@ async function skipBackSong(spotifyAuthToken, broadcasterUserName) {
   });
 }
 
-async function executeSubscriptionCall(token, broadcasterUserId, res) {
+async function executeSubscriptionCall(token, broadcasterUserId) {
+  console.log("Executing subscription call for channelid " + broadcasterUserId + " with token " + token);
   const subscription = {
     type: "channel.channel_points_custom_reward_redemption.add",
     version: "1",
@@ -580,58 +708,97 @@ async function executeSubscriptionCall(token, broadcasterUserId, res) {
       secret: process.env.SUBSCRIPTION_SECRET
     },
   };
-  const subscription_options = {
-    hostname: 'api.twitch.tv',
-    port: 443,
-    path: '/helix/eventsub/subscriptions',
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'Client-Id': process.env.TWITCH_CLIENT,
-      'Content-Type': 'application/json',
-    },
-  };
-  const subscription_data = JSON.stringify(subscription);
-  const subscriptionRequest = https.request(subscription_options, (subscription_response) => {
-    // Handle the response
-    let subscriptionResponseBody = '';
-    subscription_response.on('data', (chunk) => {
-      subscriptionResponseBody += chunk;
+  try {
+    const response = await axios({
+      method: 'POST',
+      url: 'https://api.twitch.tv/helix/eventsub/subscriptions', // Complete URL
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Client-Id': process.env.TWITCH_CLIENT,
+        'Content-Type': 'application/json',
+      },
+      data: subscription, // Axios automatically stringifies JSON data
     });
-    subscription_response.on('end', () => {
-      res.redirect('https://ananasmusicbot.de/start');
-    });
-    subscription_response.on('error', (error) => {
-      res.redirect('https://ananasmusicbot.de/start');
-      // The response body is now available in the responseBody variable
-      // You can do whatever you need to do with the response body here
-    });
-  });
-    
-  // Write the request body
-  subscriptionRequest.write(subscription_data);
-  
-  // End the request
-  subscriptionRequest.end();
+
+    console.log("Subscription Created:", response.data);
+    chatClient.say("ananasmusicbot", "/me Refreshed EventSub Subscription for channel " + broadcasterUserId);
+    return true;
+    // Handle the successful response (e.g., store the subscription ID)
+  } catch (error) {
+    console.error("Error Creating Subscription:", error);
+    chatClient.say("ananasmusicbot", "/me Failed to refresh EventSub Subscription for channel " + broadcasterUserId);
+    // Handle errors (e.g., log error details, retry)
+    return false;
+  }
+}
+
+async function executeSubscriptionCallWrapper(token, broadcasterUserId, res) {
+  let success = await executeSubscriptionCall(token, broadcasterUserId);
+  if (success) {
+    res.redirect('https://ananasmusicbot.de/start');
+    console.log("Subscription call was successful")
+  } else {
+    res.redirect('https://ananasmusicbot.de/error');
+    console.log("Subscription call was NOT successful")
+  }
 }
     
 app.get("/twitchauth", async (req, res) => {
   let code = req.query.code;
+  
+  let tempTokenData = await getTempAuthTokenByCode(code);
+  let oauthToken = tempTokenData.access_token;
+  let expiresIn = tempTokenData.expires_in;
+  let refreshToken = tempTokenData.refresh_token;
+
+  let userInfo = await getUserInfoByToken(oauthToken);
+  console.log(userInfo);
+  let username = null;
+  let userid = null;
+  if (userInfo.data !== undefined && userInfo.data !== null && userInfo.data.length > 0) {
+    userid = userInfo.data[0].id;
+    username = userInfo.data[0].login;
+  }
   res.setHeader('X-Auth-Code', code);
-  res.send(`
-  <a href="https://www.streamweasels.com/tools/convert-twitch-username-to-user-id" target="_blank">Find your Twitch ID</a>
-  <form action="/create-subscription" method="post">
-    <input type="text" name="broadcaster_user_id" placeholder="Broadcaster User ID">
-    <input type="text" name="broadcaster_user_name" placeholder="Broadcaster channelname">
-    <input type="hidden" name="code" value=`+code+`>
-    <input type="submit" value="Create Subscription">
-  </form>
-  `);
+  if (userid !== null && username !== null) {
+    res.send(`
+      <form action="/create-subscription" method="post">
+        <input type="text" name="broadcaster_user_id" placeholder="Broadcaster User ID" value="${userid}">
+        <input type="text" name="broadcaster_user_name" placeholder="Broadcaster channelname" value="${username}">
+        <input type="hidden" name="code" value=`+code+`>
+        <input type="hidden" name="oauthtoken" value=`+oauthToken+`>
+        <input type="hidden" name="expiresIn" value=`+expiresIn+`>
+        <input type="hidden" name="refreshToken" value=`+refreshToken+`>
+        <input type="submit" value="Create Subscription">
+      </form>
+      `);
+  } else {
+    /*
+    res.send(`
+      <a href="https://www.streamweasels.com/tools/convert-twitch-username-to-user-id" target="_blank">Find your Twitch ID</a>
+      <form action="/create-subscription" method="post">
+        <input type="text" name="broadcaster_user_id" placeholder="Broadcaster User ID">
+        <input type="text" name="broadcaster_user_name" placeholder="Broadcaster channelname">
+        <input type="hidden" name="code" value=`+code+`>
+        <input type="hidden" name="oauthtoken" value=`+oauthToken+`>
+        <input type="hidden" name="expiresIn" value=`+expiresIn+`>
+        <input type="hidden" name="refreshToken" value=`+refreshToken+`>
+        <input type="submit" value="Create Subscription">
+      </form>
+      `);
+    */
+      res.redirect('https://ananasmusicbot.de/error');
+  }
 });
 
 app.get('/', (req,res)=>{
   res.render('index.ejs');
 });
+
+app.get('/error', (req,res)=>{
+  res.render('error.ejs');
+});
+  
   
 app.get('/commands', (req,res)=>{
   res.render('commands.ejs');
@@ -782,15 +949,39 @@ if (!devMode) {
   httpsServer.listen(443);
 }
 httpServer.listen(81);
-
+keepSubscriptionsAlive();
 
 
 console.log("App started");
 
+async function refreshConnection() {
+  const sql = "SELECT * FROM blacklisted_users";
+  pool.getConnection(function(conn_err, conn) {
+    if (conn_err) {
+      console.log(console_err);
+      return false;
+    }
+    conn.query(sql, (query_err, query_result) => {
+      if (query_err) {
+        console.log("Query Error while trying to whitelist userid " + user);
+        console.log(query_err);
+      } else {
+      chatClient.say("ananasmusicbot", "/me Refreshed DB connection");
+      }
+      pool.releaseConnection(conn);
+    });
+  });
+}
+
 //Restart every 2 hours
 const shutdownJob = schedule.scheduleJob('0 1-23/2 * * * ', function(){
-  console.log("Scheduled Shutdown at " + new Date().toISOString());
-  process.exit(1);
+  console.log("Refreshing Database ConnectioN");
+  refreshConnection();
+});
+
+const refreshJob = schedule.scheduleJob('*/15 * * * * ', function(){
+  console.log("Refreshing EventSubs at " + new Date().toISOString());
+  keepSubscriptionsAlive();
 });
 
 //End Servercode
@@ -799,12 +990,10 @@ chatClient.onMessage(async (channel, user, text, msg) => {
   const channel_id = msg.channelId;
   const isMod = userInfo.isMod;
   const isBroadcaster = userInfo.isBroadcaster;
-  const isModUp = isBroadcaster || isMod;
+  const isModUp = isBroadcaster || isMod || (channel.toUpperCase() === "ANANASXPRESS_" && user.toUpperCase() === "STREAMELEMENTS");
   text = text.trim();
-  if (text === "hs @AnanasMusicBot" || text === "hs AnanasMusicBot") {
-    chatClient.say(channel, "Ich bin nicht Fischl___, @"+user);
-    return;
-  }
+
+
 
   if(user === nick || !text.startsWith('!')) return;
 
@@ -853,7 +1042,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
       {
         if (channel === "ananasmusicbot") {
           chatClient.join(user);
-          chatClient.say("ananasmusicbot", "Will join " + user);
+          chatClient.say("ananasmusicbot", "/me Will join " + user);
           chatClient.say(user, "/me Spawned");
         }
         break;
@@ -867,7 +1056,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
         executeSpotifyAction(channel, "resume");
         break;
       } else if (!allowSpotifyActions && isModUp) {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
     } case "!bluser": {
       if (isModUp) {
@@ -959,7 +1148,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
             executeSpotifyAction(channel, channel_id, "volume", args);
         }  
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     }
@@ -967,7 +1156,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
       if (allowSpotifyActions) {
         executeSpotifyAction(channel, channel_id, "playlist", args);
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     }
@@ -991,7 +1180,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
           executeSpotifyAction(channel, channel_id, "queue", null);
         }
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     }
@@ -1008,7 +1197,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
           executeSpotifyAction(channel, channel_id, "reversequeue", null);
         }
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     }
@@ -1016,14 +1205,14 @@ chatClient.onMessage(async (channel, user, text, msg) => {
       if (allowSpotifyActions) {
         executeSpotifyAction(channel, channel_id, "song", null);
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!songlink":
       if (allowSpotifyActions) {
         executeSpotifyAction(channel, channel_id, "songlink", null);
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!maxlength":
@@ -1036,7 +1225,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
             setMaxSongLength(channel, channel_id, intNum);
           } catch (error) {
             console.log(error);
-            chatClient.say(channel, "Invalid argument provided. Needs amount in seconds");
+            chatClient.say(channel, "/me Invalid argument provided. Needs amount in seconds");
           }
         } else {
           getMaxSongLength(channel, channel_id);
@@ -1058,7 +1247,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
             }
           } catch (error) {
             console.log(error);
-            chatClient.say(channel, "Invalid argument provided. Needs 'on' or 'off'");
+            chatClient.say(channel, "/me Invalid argument provided. Needs 'on' or 'off'");
           }
         } else {
           getLiveOnly(channel, channel_id);
@@ -1075,7 +1264,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
           executeSpotifyAction(channel, channel_id, "resume", null); 
         } 
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!pause":
@@ -1084,7 +1273,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
           executeSpotifyAction(channel, channel_id, "pause", null);  
         }
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!next":
@@ -1094,7 +1283,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
             executeSpotifyAction(channel, channel_id, "skip", null);
         }
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!previous":
@@ -1104,7 +1293,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
             executeSpotifyAction(channel, channel_id, "skipback", null);
         }
       } else {
-        chatClient.say(channel, "The current settings of this channel don't allow spotify commands when channel is offline");
+        chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
       }
       break;
     case "!ircbot": {
@@ -1112,7 +1301,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
       break;
     }
     case "!sourcecode": {
-      chatClient.say(channel, "Interested in the code? https://github.com/AnanasPizza/AnanasMusicBot");
+      chatClient.say(channel, "/me Interested in the code? https://github.com/AnanasPizza/AnanasMusicBot");
       break;
     }
   }
@@ -1594,6 +1783,65 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
          chatClient.say(broadcasterUserName, "/me Could not set music volume" + error);
         });
   }
+
+  function changeVolume(spotifyAuthToken, broadcasterUserName, volume, operation) {
+
+    const axiosInstance = axios.create({
+      headers: {
+        Authorization: 'Bearer ' + spotifyAuthToken,
+      },
+    });
+
+    const isPlayingRquest = {
+      method: 'GET',
+      url: 'https://api.spotify.com/v1/me/player'
+    }
+
+    axiosInstance(isPlayingRquest)
+    .then(isPlayingResponse => {
+      let hasActiveDevice = isPlayingResponse.data.device !== undefined && isPlayingResponse.data.device.is_active;
+      let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
+      if(!hasActiveDevice) {
+        chatClient.say(broadcasterUserName, "/me No active device");
+        return;
+      }
+      if (isPrivate) {
+        chatClient.say(broadcasterUserName, "/me Private Session");
+        return;
+      }
+      let curr_volume = isPlayingResponse.data.device.volume_percent;
+      console.log(curr_volume);
+      if (operation === "+") {
+        console.log("Adding " + volume + "%");
+        curr_volume = curr_volume + volume;
+      } else if (operation === "-") {
+        console.log("Subtracting " + volume + "%");
+        curr_volume = curr_volume - volume;
+      }
+
+      if (curr_volume > 100) {
+        curr_volume = 100;
+      } else if (curr_volume < 0) {
+        curr_volume = 0;
+      }
+      const volumeRequest = {
+        method: 'PUT',
+        url: 'https://api.spotify.com/v1/me/player/volume',
+        params: {
+          volume_percent: curr_volume,
+        }
+      }
+      axiosInstance(volumeRequest)
+        .then(volumeResponse => {
+          let responseStr = "/me Set volume to " + curr_volume;
+          chatClient.say(broadcasterUserName, responseStr);
+        })
+        .catch(error => {
+          console.log(error);
+         chatClient.say(broadcasterUserName, "/me Could not set music volume" + error);
+        });
+    });
+}
 
 
 function resume(spotifyAuthToken, broadcasterUserName) {
@@ -2430,15 +2678,20 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
             getVolume(spotifyToken, channel);
             break;
         case "volume": 
-            let volume = parseInt(args[1]);
-            if (volume > 100) {
-              chatClient.say(channel, "/me Max Value is 100");
-              return;
-            } else if (volume < 0) {
-              chatClient.say(channel, "/me Min Value is 0");
-              return;
+            if (args.length === 3) {
+              let volume = parseInt(args[2]);
+              changeVolume(spotifyToken, channel, volume, args[1]);
+            } else {
+              let volume = parseInt(args[1]);
+              if (volume > 100) {
+                chatClient.say(channel, "/me Max Value is 100");
+                return;
+              } else if (volume < 0) {
+                chatClient.say(channel, "/me Min Value is 0");
+                return;
+              }
+              setVolume(spotifyToken, channel, parseInt(args[1]));
             }
-            setVolume(spotifyToken, channel, parseInt(args[1]));
             break;
         case "song":
             getSong(spotifyToken, channel);
@@ -2529,6 +2782,161 @@ async function getSpotifyToken(channel) {
       return newAccesstoken;
     }
   }
+}
+
+async function getTwitchTokenByChannel(channel) {
+  console.log("Getting twitch token for channel " + channel);
+  const tokenquery = `
+      SELECT * FROM tokenstore
+      WHERE LOWER(twitchlogin) = ?
+      LIMIT 1
+  `;
+  const promisePool = pool.promise();
+  const [rows,fields] = await promisePool.query(tokenquery, [channel.toLowerCase()]);
+  let recordExists = false;
+  if (rows.length > 0) {
+    recordExists = true;
+    // The first result is stored in the `results[0]` object.
+    const tokenrow = rows[0];
+    console.log(tokenrow);
+    let twitchAuthToken = CryptoJS.AES.decrypt(tokenrow.twitchtoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+    let expirationSeconds = tokenrow.twitchexpiration;
+    let dateInMillisecs = new Date().getTime();
+    let dateInSecs = Math.round(dateInMillisecs / 1000);
+    if (dateInSecs < parseInt(expirationSeconds) -20 ) {
+      return twitchAuthToken;
+    }
+  }
+
+  //Refresh the Twitch Token
+  
+  const options = {
+    hostname: 'id.twitch.tv',
+    port: 443,
+    path: '/oauth2/token',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+  };
+    
+  // Create the request body
+  const data = "client_id="+process.env.TWITCH_CLIENT
+  +"&client_secret="+process.env.TWITCH_SECRET
+  +"&grant_type=client_credentials";
+  
+
+  // Create the HTTP request
+  const request = https.request(options, (response) => {
+    // Handle the response
+    let responseBody = '';
+    response.on('data', (chunk) => {
+      responseBody += chunk;
+    });
+    response.on('end', async () => {
+      let jsonBody = JSON.parse(responseBody);
+      let accesstoken = jsonBody.access_token;
+      let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(accesstoken, ENCRYPTION_PWD)).toString();
+      let expirationDate = jsonBody.expires_in;
+      let newCalcExpiryDate = expirationDate + dateInSecs - 10;
+      if (recordExists) {
+        const updateQuery = `
+        UPDATE tokenstore
+        SET twitchtoken = ?, twitchexpiration = ?
+        WHERE LOWER(twitchlogin) = ?
+        `;
+        const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
+      } 
+      return accesstoken;
+    });
+  });
+  request.on('error', function(err) {
+    console.log("Error when trying to get twitch token");
+    console.log(err);
+  });
+  // Write the request body
+  request.write(data);
+  // End the request
+  request.end();
+}
+
+
+async function getTwitchTokenByChannelId(channelid) {
+  console.log("Getting twitch token for channel " + channelid);
+  const tokenquery = `
+      SELECT * FROM tokenstore
+      WHERE LOWER(twitchid) = ?
+      LIMIT 1
+  `;
+  const promisePool = pool.promise();
+  const [rows,fields] = await promisePool.query(tokenquery, [channelid.toLowerCase()]);
+  let recordExists = false;
+  if (rows.length > 0) {
+    recordExists = true;
+    // The first result is stored in the `results[0]` object.
+    const tokenrow = rows[0];
+    console.log(tokenrow);
+    let twitchAuthToken = CryptoJS.AES.decrypt(tokenrow.twitchtoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
+    let expirationSeconds = tokenrow.twitchexpiration;
+    let dateInMillisecs = new Date().getTime();
+    let dateInSecs = Math.round(dateInMillisecs / 1000);
+    if (dateInSecs < parseInt(expirationSeconds) -20 ) {
+      return twitchAuthToken;
+    }
+  }
+
+  //Refresh the Twitch Token
+  
+  const options = {
+    hostname: 'id.twitch.tv',
+    port: 443,
+    path: '/oauth2/token',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+  };
+    
+  // Create the request body
+  const data = "client_id="+process.env.TWITCH_CLIENT
+  +"&client_secret="+process.env.TWITCH_SECRET
+  +"&grant_type=client_credentials";
+  
+
+  // Create the HTTP request
+  const request = https.request(options, (response) => {
+    // Handle the response
+    let responseBody = '';
+    response.on('data', (chunk) => {
+      responseBody += chunk;
+    });
+    response.on('end', async () => {
+      let jsonBody = JSON.parse(responseBody);
+      let accesstoken = jsonBody.access_token;
+      let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(accesstoken, ENCRYPTION_PWD)).toString();
+      let expirationDate = jsonBody.expires_in;
+      let dateInMillisecs = new Date().getTime();
+      let dateInSecs = Math.round(dateInMillisecs / 1000);
+      let newCalcExpiryDate = expirationDate + dateInSecs - 10;
+      if (recordExists) {
+        const updateQuery = `
+        UPDATE tokenstore
+        SET twitchtoken = ?, twitchexpiration = ?
+        WHERE LOWER(twitchid) = ?
+        `;
+        const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channelid.toLowerCase()]);
+      } 
+      return accesstoken;
+    });
+  });
+  request.on('error', function(err) {
+    console.log("Error when trying to get twitch token");
+    console.log(err);
+  });
+  // Write the request body
+  request.write(data);
+  // End the request
+  request.end();
 }
 
 async function isLive(channel) {
