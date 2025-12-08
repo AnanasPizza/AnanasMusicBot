@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Dashboard</h1>
+  <p>Currently Attached Twitch ID: <%= broadcasterId %></p>
+
+  <div>
+    <a href="https://id.twitch.tv/oauth2/authorize?client_id=<%= twitchClient %>&redirect_uri=<%= twitchRedirectUri %>&response_type=code&scope=channel%3Aread%3Aredemptions" class="btn btn-primary">Connect with Twitch</a>
+    <a href="<%= spotifyAuthUri %>" class="btn btn-primary">Connect with Spotify</a>
+  </div>
+
+  <% if (modStats && modStats.length > 0) { %>
+      <div style="width: 800px; margin-top: 50px;">
+        <h2>Top Active Moderators</h2>
+        <canvas id="modChart"></canvas>
+      </div>
+      <script>
+        const ctx = document.getElementById('modChart');
+        const modData = <%- JSON.stringify(modStats) %>;
+
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: modData.map(d => d.user_name),
+            datasets: [{
+              label: '# of Messages',
+              data: modData.map(d => d.message_count),
+              borderWidth: 1
+            }]
+          },
+          options: {
+            scales: {
+              y: {
+                beginAtZero: true
+              }
+            }
+          }
+        });
+      </script>
+  <% } else if (broadcasterId !== 'Not connected') { %>
+      <p style="margin-top: 50px;">No moderator activity recorded yet.</p>
+  <% } %>
+</body>
+</html>

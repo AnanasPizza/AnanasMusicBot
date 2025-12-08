@@ -83,6 +83,18 @@ CREATE TABLE `channel_settings` (
 -- --------------------------------------------------------
 
 --
+-- Tabellenstruktur für Tabelle `moderator_messages`
+--
+
+CREATE TABLE `moderator_messages` (
+  `channel_id` varchar(255) NOT NULL,
+  `user_name` varchar(255) NOT NULL,
+  `message_count` int DEFAULT '0'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
+
+-- --------------------------------------------------------
+
+--
 -- Tabellenstruktur für Tabelle `tokenstore`
 --
 
@@ -131,6 +143,12 @@ ALTER TABLE `bot_tokenstore`
 --
 ALTER TABLE `channel_settings`
   ADD UNIQUE KEY `channel_id` (`channel_id`,`settings_key`);
+
+--
+-- Indizes für die Tabelle `moderator_messages`
+--
+ALTER TABLE `moderator_messages`
+  ADD PRIMARY KEY (`channel_id`,`user_name`);
 
 --
 -- Indizes für die Tabelle `tokenstore`
