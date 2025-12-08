@@ -41,8 +41,6 @@ var state = generateRandomString(16);
 
 const app = express();
 
-app.set('view engine', 'ejs');
-
 // Need raw message body for signature verification
 app.use(express.raw({          
     type: 'application/json'
@@ -68,20 +66,6 @@ let dbconfig = {
 const devMode = process.env.DEV_MODE === "true";
 
 let pool = mysql.createPool(dbconfig);
-
-const createTableQuery = `
-  CREATE TABLE IF NOT EXISTS moderator_messages (
-    channel_id VARCHAR(255) NOT NULL,
-    user_name VARCHAR(255) NOT NULL,
-    message_count INT DEFAULT 0,
-    PRIMARY KEY (channel_id, user_name)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
-`;
-
-pool.query(createTableQuery, (err) => {
-  if (err) console.error("Error creating table:", err);
-  else console.log("Table moderator_messages checked/created.");
-});
 
 pool.on('release', () => {
   console.log('Connection released to the pool');
@@ -194,27 +178,18 @@ chatClient.onAuthenticationFailure((text, retryCount) => {
   
 app.get("/start", async (req, res) => {
   var session=req.session;
-
-  // Fetch mod stats if broadcasterId is present
-  let modStats = [];
-  if (session.broadcasterId) {
-      const sql = "SELECT user_name, message_count FROM moderator_messages WHERE channel_id = ? ORDER BY message_count DESC";
-      const promisePool = pool.promise();
-      try {
-        const [rows] = await promisePool.query(sql, [session.broadcasterId]);
-        modStats = rows;
-      } catch (err) {
-        console.error("Error fetching mod stats:", err);
-      }
-  }
-
-  res.render('detail.ejs', {
-      broadcasterId: session.broadcasterId || 'Not connected',
-      twitchClient: process.env.TWITCH_CLIENT,
-      twitchRedirectUri: process.env.TWITCH_REDIRECT_URI,
-      spotifyAuthUri: process.env.SPOTIFY_AUTH_URI,
-      modStats: modStats
-  });
+  res.send(`
+      <html>
+      <head>
+        <title>Login</title>
+      </head>
+        <body>
+          <p>Currently Attached Twitch ID: ` + session.broadcasterId + `
+          <a href="https://id.twitch.tv/oauth2/authorize?client_id=` + process.env.TWITCH_CLIENT +`&redirect_uri=`+ process.env.TWITCH_REDIRECT_URI +`&response_type=code&scope=channel%3Aread%3Aredemptions" class="btn btn-primary">Connect with Twitch</a>
+          <a href="` + process.env.SPOTIFY_AUTH_URI +`" class="btn btn-primary">Connect with Spotify</a>
+        </body>
+      </html>
+  `);
 });
   
 app.get('/spotifyauth', function(req, res) {
@@ -755,19 +730,6 @@ chatClient.onMessage((channel, user, text, msg) => {
   const isMod = userInfo.isMod;
   const isBroadcaster = userInfo.isBroadcaster;
   const isModUp = isBroadcaster || isMod;
-
-  if (isMod || isBroadcaster) {
-      // Increment message count
-      const updateSql = `
-        INSERT INTO moderator_messages (channel_id, user_name, message_count)
-        VALUES (?, ?, 1)
-        ON DUPLICATE KEY UPDATE message_count = message_count + 1
-      `;
-      pool.execute(updateSql, [channel_id, user], (err) => {
-          if (err) console.error("Error updating mod stats:", err);
-      });
-  }
-
   text = text.trim();
   if (text === "hs @AnanasMusicBot" || text === "hs AnanasMusicBot") {
     chatClient.say(channel, "Ich bin nicht Fischl___, @"+user);
