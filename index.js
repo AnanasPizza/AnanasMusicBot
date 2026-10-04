@@ -17,9 +17,9 @@ import {isNumberFromOneToTen, convertMillisecondsToMinuteSeconds} from "./lib/li
 import CryptoJS from "crypto-js";
 import Filter from 'bad-words';
 import util from 'util';
-import qs from 'qs';
 import cookieParser from 'cookie-parser';
 const filter = new Filter();
+
 
 // Notification request headers
 const TWITCH_MESSAGE_ID = 'Twitch-Eventsub-Message-Id'.toLowerCase();
@@ -40,6 +40,9 @@ dotenv.config();
 const ENCRYPTION_PWD = process.env.ENCRYPTION_PWD;
 const TWITCH_CLIENT_ID            = process.env.TWITCH_CLIENT;
 const TWITCH_SECRET               = process.env.TWITCH_SECRET;
+
+// Spotify Web API Development Mode specifies a maximum of 5 authorized users per development app
+const SPOTIFY_MAX_USERS_PER_DEV_INSTANCE = 5;
 
 const requestTimeoutMap = new Map();
 
@@ -124,9 +127,8 @@ if (!devMode) {
       }
       highestSpotifyId = row.spotify_instance_id;
     });
-    console.log(spotifyInstanceIdMap);
-    //Maximum 25 users allowed per spotify development instance.
-    if (spotifyInstanceIdMap.get(highestSpotifyId) >= 25) {
+    // Maximum users allowed per spotify development instance (per Spotify Web API Dev Mode spec).
+    if (spotifyInstanceIdMap.get(highestSpotifyId) >= SPOTIFY_MAX_USERS_PER_DEV_INSTANCE) {
       //Switch to the next instance.
       highestSpotifyId += 1;
     }
@@ -150,14 +152,17 @@ if (!devMode) {
       }
       highestSpotifyId = row.spotify_instance_id;
     });
-    console.log(spotifyInstanceIdMap);
-    //Maximum 25 users allowed per spotify development instance.
-    if (spotifyInstanceIdMap.get(highestSpotifyId) >= 25) {
+    // Maximum users allowed per spotify development instance (per Spotify Web API Dev Mode spec).
+    if (spotifyInstanceIdMap.get(highestSpotifyId) >= SPOTIFY_MAX_USERS_PER_DEV_INSTANCE) {
       //Switch to the next instance.
       highestSpotifyId += 1;
     }
   });
 }
+
+getAllTwitchIDsInDatabase().then(data => {
+  console.log(data);
+})
 
 const clientId = process.env.TWITCH_CLIENT;
 const clientSecret = process.env.TWITCH_SECRET;
@@ -172,6 +177,8 @@ const authProvider = new RefreshingAuthProvider(
 authProvider.onRefresh(async (userId, newTokenData) => await updateToken(userId, newTokenData));
 
 const tokenDataChat = await getChatTokendata();
+console.log("token data chat");
+console.log(tokenDataChat);
 const tokenDataApi = await getApiTokendata();
 await authProvider.addUserForToken(tokenDataChat, ['chat']);
 await authProvider.addUserForToken(tokenDataApi, ['api']);
@@ -241,7 +248,6 @@ async function updateToken(userId, newTokenData) {
 }
 
 const chatClient = new ChatClient({ authProvider, channels: twitchIds, rejoinChannelsOnReconnect: true });
-const apiClient = new ApiClient({ authProvider });
 chatClient.connect();
 
 chatClient.onAuthenticationSuccess((text, retryCount) => {
@@ -331,9 +337,25 @@ async function deleteWebhook(webhookId) {
     }
 }
 
+async function getAllTwitchIDsInDatabase() {
+  let sql = "SELECT * FROM tokenstore";
+  const promisePool = pool.promise();
+  const [rows,fields] = await promisePool.query(sql);
+  let twitchIds = [];
+  if (rows.length < 1) {
+    console.log("No twitchIDsInDatabase");
+  } else {
+    for (let i = 0; i < rows.length; i++) {
+      let twitchId = rows[i].twitchid;
+      twitchIds.push(twitchId);
+    }
+  }
+  return twitchIds;
+}
+
 async function keepSubscriptionsAlive() {
-  console.log("Getting all event subs");
   let allEventSubs = await getAllEventSubs();
+  let allTwitchIDsInDatabase = await getAllTwitchIDsInDatabase();
   const eventSubsData = allEventSubs.data;
   console.log(util.inspect(allEventSubs, false, null, true));
   let enabledTwitchIds = [];
@@ -343,7 +365,6 @@ async function keepSubscriptionsAlive() {
     let eventSub = eventSubsData[y];
     if (eventSub.status === 'enabled') {
       enabledTwitchIds.push(eventSub.condition.broadcaster_user_id);
-      console.log("Eventsub enabled for channelid " + eventSub.condition.broadcaster_user_id);
     } else if (eventSub.status === 'notification_failures_exceeded') {
       disabledTwitchIds.push(eventSub.condition.broadcaster_user_id);
       if (disabledWebhooks.has(eventSub.condition.broadcaster_user_id)) {
@@ -354,20 +375,30 @@ async function keepSubscriptionsAlive() {
         let entry = [eventSub.id];
         disabledWebhooks.set(eventSub.condition.broadcaster_user_id, entry);
       }
-      console.log("Got disabled eventsub for channelid " + eventSub.condition.eventSub.condition.broadcaster_user_id);
       chatClient.say("ananasmusicbot", "EventSub for channel with id " + eventSub.condition.broadcaster_user_id + " not active anymore. Trying to refresh");
     }
   }
   disabledTwitchIds = disabledTwitchIds.filter(n => !enabledTwitchIds.includes(n));
   console.log(disabledTwitchIds);
-  console.log("Trying to refresh subscription call.")
+  let twitchIdsWithNoSubscription = allTwitchIDsInDatabase.filter(item => !disabledTwitchIds.includes(item) && !enabledTwitchIds.includes(item));
+  console.log(twitchIdsWithNoSubscription);
   let appToken = await getAppAccessToken();
-  console.log("New token retrieved: " + appToken);
+  const ignoredTwitchIDs = ['497989330','128989191']
   for (let j = 0; j < disabledTwitchIds.length; j++) {
     let id = disabledTwitchIds[j];
     //let twitchToken = await getTwitchTokenByChannelId(id);
     //executeSubscriptionCall(twitchToken, id);
     executeSubscriptionCall(appToken, id);
+  }
+  for (let j = 0; j < twitchIdsWithNoSubscription.length; j++) {
+    let id = twitchIdsWithNoSubscription[j];
+    //let twitchToken = await getTwitchTokenByChannelId(id);
+    //executeSubscriptionCall(twitchToken, id);
+    if (ignoredTwitchIDs.includes(id)) {
+      console.log("Ignoring Twitch ID " + id);
+    } else {
+      executeSubscriptionCall(appToken, id);
+    }
   }
   removeDisabledWebhooks(disabledWebhooks);
 }
@@ -394,20 +425,112 @@ async function getTwitchAppAuthToken() {
 }
   
 app.get("/start", async (req, res) => {
-  var session=req.session;
+  var session = req.session;
+  let statusMessage = "";
+  if (req.query.status === "spotify_connected") {
+    statusMessage = '<p style="color: green; font-weight: bold;">Spotify account successfully connected / re-authorized!</p>';
+  } else if (req.query.error === "missing_twitch_session") {
+    statusMessage = '<p style="color: red; font-weight: bold;">Please connect your Twitch account first before authorizing Spotify.</p>';
+  } else if (req.query.error === "expired") {
+    statusMessage = '<p style="color: red; font-weight: bold;">Your Spotify refresh token has expired (6-month expiration). Please re-authenticate below.</p>';
+  }
+
+  let twitchStatus = session.broadcasterId
+    ? `<p style="color: green;">Attached Twitch Channel: <strong>${session.broadcasterName || session.broadcasterId}</strong> (ID: ${session.broadcasterId})</p>`
+    : `<p style="color: #666;">No Twitch channel currently attached to this browser session. Please complete Step 1 first.</p>`;
+
+  const spotifyAuthUrl = process.env.SPOTIFY_AUTH_URI || "/spotifyauth";
+  const twitchAuthUrl = "https://id.twitch.tv/oauth2/authorize?client_id=" + process.env.TWITCH_CLIENT + "&redirect_uri=" + process.env.TWITCH_REDIRECT_URI + "&response_type=code&scope=channel%3Aread%3Aredemptions+channel%3Amanage%3Aredemptions";
+
   res.send(`
       <html>
       <head>
-        <title>Login</title>
+        <title>Ananas Music Bot - Login & Re-authorization</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 30px; line-height: 1.6; background-color: #f7f9fa; }
+          .card { background: white; border: 1px solid #ddd; padding: 24px; border-radius: 8px; max-width: 640px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+          .btn { display: inline-block; padding: 10px 20px; margin: 8px 4px 16px 0; background: #9146FF; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; }
+          .btn-spotify { background: #1DB954; }
+          .step { margin-top: 16px; }
+        </style>
       </head>
         <body>
-          <p>Currently Attached Twitch ID: ` + session.broadcasterId + `
-          <a href="https://id.twitch.tv/oauth2/authorize?client_id=` + process.env.TWITCH_CLIENT +`&redirect_uri=`+ process.env.TWITCH_REDIRECT_URI +`&response_type=code&scope=channel%3Aread%3Aredemptions" class="btn btn-primary">Connect with Twitch</a>
-          <a href="` + process.env.SPOTIFY_AUTH_URI +`" class="btn btn-primary">Connect with Spotify</a>
+          <div class="card">
+            <h2>Ananas Music Bot - Setup & Re-authorization</h2>
+            ${statusMessage}
+            ${twitchStatus}
+            <div class="step">
+              <p><strong>Step 1:</strong> Connect Twitch Account (identifies your stream channel):</p>
+              <a href="${twitchAuthUrl}" class="btn">Connect with Twitch</a>
+            </div>
+            <div class="step">
+              <p><strong>Step 2:</strong> Connect / Re-authorize Spotify (Spotify refresh tokens expire after 6 months):</p>
+              <a href="${spotifyAuthUrl}" class="btn btn-spotify">Connect with Spotify</a>
+            </div>
+          </div>
         </body>
       </html>
   `);
 });
+
+app.get("/:id/settings", async (req, res) => {
+  const promisePool = pool.promise();
+  let channelId = req.params.id;
+  let generalSettingsSql = "SELECT * FROM channel_settings WHERE channel_id = ?"
+  const [generalSettingsRows, generalSettingsFields] = await promisePool.query(generalSettingsSql, [channelId]);
+  let generalSettings = [];
+  for (let i = 0; i < generalSettingsRows.length; i++) {
+    let row = generalSettingsRows[i];
+    let key = row["settings_key"];
+    let val = row["settings_val"];
+    let obj = {
+      key: key,
+      val: val
+    }
+    generalSettings.push(obj);
+  }
+  let blacklistedUsersSql = "SELECT * FROM blacklisted_users WHERE channel_id = ?";
+  const [blacklistedUsersRows, blacklistedUsersFields] = await promisePool.query(blacklistedUsersSql, [channelId]);
+  let blacklistedUsers = [];
+  for (let i = 0; i < blacklistedUsersRows.length; i++) {
+    let row = blacklistedUsersRows[i];
+    let user = row["blocked_user_name"];
+    blacklistedUsers.push(user);
+  }
+
+  let blacklistedArtistsSql = "SELECT * FROM blacklisted_artists WHERE channel_id = ?";
+  const [blacklistedArtistsRows, blacklistedArtistsFields] = await promisePool.query(blacklistedArtistsSql, [channelId]);
+  let blacklistedArtists = [];
+  for (let i = 0; i < blacklistedArtistsRows.length; i++) {
+    let row = blacklistedArtistsRows[i];
+    let obj = {
+      name: row["name"],
+      artistId: row["blocked_artist_id"]
+    }
+    blacklistedArtists.push(obj);
+  }
+
+  let blacklistedTracksSql = "SELECT * FROM blacklisted_tracks WHERE channel_id = ?";
+  const [blacklistedTracksRows, blacklistedTracksFields] = await promisePool.query(blacklistedTracksSql, [channelId]);
+  let blacklistedTracks = [];
+  for (let i = 0; i < blacklistedTracksRows.length; i++) {
+    let row = blacklistedTracksRows[i];
+    let obj = {
+      songname: filter.clean(row["songname"]),
+      artist: row["artist"],
+      trackId: row["blocked_track_id"]
+    }
+    blacklistedTracks.push(obj);
+  }
+  let settings = {
+    generalSettings: generalSettings,
+    blacklistedUsers: blacklistedUsers, 
+    blacklistedArtists: blacklistedArtists, 
+    blacklistedTracks: blacklistedTracks
+  }
+
+  res.render('settings.ejs', { settings: settings});
+})
   
 app.get('/spotifyauth', function(req, res) {
   var scope = 'user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-recently-played';
@@ -417,84 +540,109 @@ app.get('/spotifyauth', function(req, res) {
       client_id: process.env.SPOTIFY_CLIENT,
       scope: scope,
       redirect_uri: process.env.SPOTIFY_CALLBACK_URI,
-      state: state
+      state: state,
+      show_dialog: true
     })
   );
 });
   
-app.get('/spotifycallback', function(req, res) {
+app.get('/spotifycallback', async function(req, res) {
   var code = req.query.code || null;
   var returned_state = req.query.state || null;
   const session = req.session;
   session.spotifycode = code;
+  const redirectBase = process.env.APP_BASE_URI || "https://ananasmusicbot.de";
+
   if (returned_state === null || returned_state !== state) {
     res.redirect('/#' +
       querystring.stringify({
         error: 'state_mismatch'
       }));
-  } else {
-    const options = {
-      hostname: 'accounts.spotify.com',
-      port: 443,
-      path: '/api/token',
+    return;
+  }
+
+  try {
+    const tokenResponse = await axios({
+      url: 'https://accounts.spotify.com/api/token',
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': 'Basic ' + (new Buffer.from(process.env.SPOTIFY_CLIENT + ':' + process.env.SPOTIFY_SECRET).toString('base64'))
+        'Authorization': 'Basic ' + (Buffer.from(process.env.SPOTIFY_CLIENT + ':' + process.env.SPOTIFY_SECRET).toString('base64'))
       },
-    };
-    
-    // Create the request body
-    const data = "redirect_uri="+process.env.SPOTIFY_CALLBACK_URI
-    +"&code="+code
-    +"&grant_type=authorization_code";
-    
-  
-    // Create the HTTP request
-    const request = https.request(options, (response) => {
-      // Handle the response
-      let responseBody = '';
-      response.on('data', (chunk) => {
-        responseBody += chunk;
-      });
-      response.on('end', () => {
-        let jsonBody = JSON.parse(responseBody);
-        let accesstoken = new String(CryptoJS.AES.encrypt(jsonBody.access_token, ENCRYPTION_PWD)).toString();
-        let refreshtoken = new String(CryptoJS.AES.encrypt(jsonBody.refresh_token, ENCRYPTION_PWD)).toString();
-        let expiresin = jsonBody.expires_in;
-        
-        let dateInMillisecs = new Date().getTime();
-        let dateInSecs = Math.round(dateInMillisecs / 1000);
-
-        let calcExpiryDate = expiresin + dateInSecs - 10;
-        pool.getConnection(function(err, conn) {
-          // Do something with the connection
-          if (session.broadcasterId != undefined) {
-            let sql = "INSERT INTO tokenstore(twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration, spotify_instance_id)"
-            +"VALUES('"+session.broadcasterId+"','"+session.broadcasterName+"','"+accesstoken+"','"+refreshtoken+"','"+calcExpiryDate+"','"+highestSpotifyId+"')";
-            try {
-              conn.query(sql);
-              console.log("Trying to join" + session.broadcasterName);
-              let channelname = session.broadcasterName;
-              chatClient.join(channelname);
-              chatClient.say(channelname, "/me Channel Points Subscription is active now");
-              res.redirect("https://ananasmusicbot.de/start");
-            } catch (err) {
-              console.log(err);
-              res.sendStatus(500);
-            }
-          } else {
-            res.redirect("https://ananasmusicbot.de/start");
-          }
-          // Don't forget to release the connection when finished!
-          pool.releaseConnection(conn);
-        });
-      });
+      data: querystring.stringify({
+        code: code,
+        redirect_uri: process.env.SPOTIFY_CALLBACK_URI,
+        grant_type: 'authorization_code'
+      })
     });
-    // Write the request body
-    request.write(data);
-    // End the request
-    request.end();
+
+    let jsonBody = tokenResponse.data;
+    if (!jsonBody.access_token || !jsonBody.refresh_token) {
+      console.error("Missing access_token or refresh_token from Spotify response:", jsonBody);
+      res.redirect(redirectBase + "/error");
+      return;
+    }
+
+    let accesstoken = new String(CryptoJS.AES.encrypt(jsonBody.access_token, ENCRYPTION_PWD)).toString();
+    let refreshtoken = new String(CryptoJS.AES.encrypt(jsonBody.refresh_token, ENCRYPTION_PWD)).toString();
+    let expiresin = jsonBody.expires_in;
+
+    let dateInMillisecs = new Date().getTime();
+    let dateInSecs = Math.round(dateInMillisecs / 1000);
+    let calcExpiryDate = expiresin + dateInSecs - 10;
+
+    const promisePool = pool.promise();
+
+    if (session.broadcasterId != undefined) {
+      // Check if user already exists in tokenstore (e.g. re-authorizing after 6-month expiration)
+      const checkSql = "SELECT id, spotify_instance_id FROM tokenstore WHERE twitchid = ? OR LOWER(twitchlogin) = ? LIMIT 1";
+      const [existingRows] = await promisePool.query(checkSql, [session.broadcasterId, session.broadcasterName.toLowerCase()]);
+
+      let instanceId = highestSpotifyId;
+      let isNew = existingRows.length === 0;
+
+      if (!isNew) {
+        // Existing user re-authorizing: preserve their existing instance ID and update tokens
+        instanceId = existingRows[0].spotify_instance_id || highestSpotifyId;
+        const updateSql = `
+          UPDATE tokenstore
+          SET spotifytoken = ?, spotifyrefresh = ?, spotifyexpiration = ?, twitchlogin = ?
+          WHERE twitchid = ?
+        `;
+        await promisePool.query(updateSql, [accesstoken, refreshtoken, calcExpiryDate, session.broadcasterName, session.broadcasterId]);
+        console.log("Successfully re-authorized Spotify for channel: " + session.broadcasterName);
+      } else {
+        // New user connecting for the first time
+        const insertSql = `
+          INSERT INTO tokenstore (twitchid, twitchlogin, spotifytoken, spotifyrefresh, spotifyexpiration, spotify_instance_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `;
+        await promisePool.query(insertSql, [session.broadcasterId, session.broadcasterName, accesstoken, refreshtoken, calcExpiryDate, instanceId]);
+        console.log("Successfully stored new Spotify authorization for channel: " + session.broadcasterName);
+
+        let currVal = (spotifyInstanceIdMap.get(highestSpotifyId) || 0) + 1;
+        spotifyInstanceIdMap.set(highestSpotifyId, currVal);
+        if (currVal >= SPOTIFY_MAX_USERS_PER_DEV_INSTANCE) {
+          highestSpotifyId += 1;
+        }
+      }
+
+      let channelname = session.broadcasterName;
+      try {
+        chatClient.join(channelname);
+        chatClient.say(channelname, "/me Spotify authorization is active now");
+      } catch (chatErr) {
+        console.error("Chat client error on join/say:", chatErr);
+      }
+
+      res.redirect(redirectBase + "/start?status=spotify_connected");
+    } else {
+      console.warn("BroadcasterId missing in session when completing Spotify callback");
+      res.redirect(redirectBase + "/start?error=missing_twitch_session");
+    }
+  } catch (err) {
+    console.error("Error in spotifycallback:", err.response ? err.response.data : err.message);
+    res.redirect(redirectBase + "/error");
   }
 });
   
@@ -534,7 +682,11 @@ app.post('/eventsub', async (req, res) => {
                   chatClient.say(broadcasterName, "/me @" + requestedBy + ", you are currently blacklisted for songrequests");
                 } else {
                   const spotifyAuthToken = await getSpotifyToken(broadcasterName);
-                  sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, broadcasterId);
+                  if (!spotifyAuthToken) {
+                    chatClient.say(broadcasterName, "/me @" + requestedBy + ", cannot request song: Spotify authorization has expired. Broadcaster must re-authenticate at " + (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start");
+                  } else {
+                    sendSongToQueue(spotifyAuthToken, userInput, broadcasterName, requestedBy, broadcasterId);
+                  }
                 }
               }            
             } else if ("channel.channel_points_custom_reward_redemption.add" === notification.subscription.type && eventtitle === "Skip Song") {
@@ -555,7 +707,11 @@ app.post('/eventsub', async (req, res) => {
                 chatClient.say(broadcasterName, "/me @" + requestedBy + ", Can't skip songs when channel is offline due to specific setting");
               } else {
                 const spotifyAuthToken = await getSpotifyToken(broadcasterName);
-                skipSong(spotifyAuthToken, broadcasterName);
+                if (!spotifyAuthToken) {
+                  chatClient.say(broadcasterName, "/me @" + requestedBy + ", cannot skip song: Spotify authorization has expired. Broadcaster must re-authenticate at " + (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start");
+                } else {
+                  skipSong(spotifyAuthToken, broadcasterName);
+                }
               }
             }
           }
@@ -605,52 +761,29 @@ async function getAppAccessToken() {
 app.post("/create-subscription", async (req, res) => {
   const broadcasterUserId = req.body.broadcaster_user_id;
   const broadcasterName = req.body.broadcaster_user_name;
+  const oauthtoken = req.body.oauthtoken;
+  const refreshToken = req.body.refreshToken;
+  const expiresIn = req.body.expiresIn;
+  storeTwitchAuthToken(broadcasterUserId, broadcasterName, oauthtoken, refreshToken, expiresIn);
   const session = req.session;
   session.broadcasterId = broadcasterUserId;
   session.broadcasterName = broadcasterName;
   const accesstoken = await getAppAccessToken();
   console.log(accesstoken);
   executeSubscriptionCallWrapper(accesstoken, broadcasterUserId, res);
-  /*
-  const options = {
-    hostname: 'id.twitch.tv',
-    port: 443,
-    path: '/oauth2/token',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-  };
-  
-  // Create the request body
-  const data = "client_id="+process.env.TWITCH_CLIENT
-  +"&client_secret="+process.env.TWITCH_SECRET
-  +"&grant_type=client_credentials";
-  
-
-  // Create the HTTP request
-  const request = https.request(options, (response) => {
-    // Handle the response
-    let responseBody = '';
-    response.on('data', (chunk) => {
-      responseBody += chunk;
-    });
-    response.on('end', () => {
-      let jsonBody = JSON.parse(responseBody);
-      let accesstoken = jsonBody.access_token;
-      executeSubscriptionCallWrapper(accesstoken, broadcasterUserId, res);
-    });
-  });
-
-  request.on('error', function(err) {
-    res.redirect('https://ananasmusicbot.de/error');
-  });
-  // Write the request body
-  request.write(data);
-  // End the request
-  request.end();
-  */
 });
+
+function storeTwitchAuthToken(broadcasterId, token, refreshToken, expiresIn) {
+  let expiresAt = Date.now() + expiresIn;
+  let updateSql = "UPDATE tokenstore SET twitchtoken = ?, twitchrefresh = ?, twitchexpiration = ? WHERE twitchid = ?";
+  conn.query(updateSql, [token, refreshToken, expiresAt, broadcasterId], (query_err, query_result) => {
+    if (query_err) {
+      console.log("Error when updating value");
+    } else {
+      console.log("Updated value for maximum song length to " + seconds + " seconds");
+    }
+  });
+}
 
 async function skipSong(spotifyAuthToken, broadcasterUserName) {
   const axiosInstance = axios.create({
@@ -725,8 +858,8 @@ async function executeSubscriptionCall(token, broadcasterUserId) {
     return true;
     // Handle the successful response (e.g., store the subscription ID)
   } catch (error) {
-    console.error("Error Creating Subscription:", error);
-    chatClient.say("ananasmusicbot", "/me Failed to refresh EventSub Subscription for channel " + broadcasterUserId);
+    console.error("Error Creating Subscription. Status: ", error.response.data.status + ". Msg: " + error.response.data.message);
+    chatClient.say("ananasmusicbot", "/me Failed to refresh EventSub Subscription for channel " + broadcasterUserId + ". Msg: " + error.response.data.message);
     // Handle errors (e.g., log error details, retry)
     return false;
   }
@@ -1053,7 +1186,7 @@ chatClient.onMessage(async (channel, user, text, msg) => {
     }
     case "!resume": {
       if (isModUp && allowSpotifyActions) {
-        executeSpotifyAction(channel, "resume");
+        executeSpotifyAction(channel, channel_id, "resume", null);
         break;
       } else if (!allowSpotifyActions && isModUp) {
         chatClient.say(channel, "/me The current settings of this channel don't allow spotify commands when channel is offline");
@@ -1641,7 +1774,7 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
           method: 'GET',
           url: 'https://api.spotify.com/v1/me/player/queue'
         }
-        const limit = queuesize != null ? queuesize : 5;
+        let limit = queuesize != null ? queuesize : 5;
         if (limit > 10) {
           limit = 10;
         }
@@ -1658,9 +1791,9 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
               i++;
             });
             if (responseStr.endsWith(" songs: ")) {
-             chatClient.say(broadcasterUserName, "/me Nothing in Queue right now");  
+              chatClient.say(broadcasterUserName, "/me Nothing in Queue right now");  
             } else {
-             chatClient.say(broadcasterUserName, "/me " + responseStr.slice(0,-2));
+              chatClient.say(broadcasterUserName, "/me " + responseStr.slice(0,-2));
             }
           })
           .catch(error => {
@@ -1695,7 +1828,7 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
 
         let currTime = Date.now();
 
-        const limit = queuesize != null ? queuesize : 5;
+        let limit = queuesize != null ? queuesize : 5;
         if (limit > 10) {
           limit = 10;
         }
@@ -1800,11 +1933,11 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
     axiosInstance(isPlayingRquest)
     .then(isPlayingResponse => {
       let hasActiveDevice = isPlayingResponse.data.device !== undefined && isPlayingResponse.data.device.is_active;
-      let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
       if(!hasActiveDevice) {
         chatClient.say(broadcasterUserName, "/me No active device");
         return;
       }
+      let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
       if (isPrivate) {
         chatClient.say(broadcasterUserName, "/me Private Session");
         return;
@@ -1844,7 +1977,7 @@ function getQueue(spotifyAuthToken, broadcasterUserName, queuesize) {
 }
 
 
-function resume(spotifyAuthToken, broadcasterUserName) {
+async function resume(spotifyAuthToken, broadcasterUserName) {
   const axiosInstance = axios.create({
       headers: {
           Authorization: 'Bearer '+spotifyAuthToken,
@@ -1857,12 +1990,18 @@ function resume(spotifyAuthToken, broadcasterUserName) {
       }
       axiosInstance(isPlayingRquest)
       .then(isPlayingResponse => {
-        let isPlaying = isPlayingResponse.data.is_playing;
-        let isPrivate = isPlayingResponse.data.is_private_session;
-        if (isPrivate) {
-         chatClient.say(broadcasterUserName, "/me Private Session");
+        let hasActiveDevice = isPlayingResponse.data.device !== undefined && isPlayingResponse.data.device.is_active;
+        if(!hasActiveDevice) {
+          chatClient.say(broadcasterUserName, "/me No active device");
           return;
         }
+        let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
+        if (isPrivate) {
+          chatClient.say(broadcasterUserName, "/me Private Session");
+          return;
+        }
+        let isPlaying = isPlayingResponse.data.is_playing;
+        console.log("Not playing right now, trying to resume");
         if (!isPlaying) {
           const playRequest = {
             method: 'PUT',
@@ -1870,8 +2009,8 @@ function resume(spotifyAuthToken, broadcasterUserName) {
           }
           axiosInstance(playRequest)
           .then(playResponse => {
-            let responseStr = "Resumed Playing";
-           chatClient.say(broadcasterUserName, responseStr);
+            let responseStr = "/me Resumed Playing";
+            chatClient.say(broadcasterUserName, responseStr);
           }).catch(error => {
             console.log(error);
           });
@@ -1884,48 +2023,49 @@ function resume(spotifyAuthToken, broadcasterUserName) {
       });     
 }
 
-function pause(spotifyAuthToken, broadcasterUserName) {
+async function pause(spotifyAuthToken, broadcasterUserName) {
   const axiosInstance = axios.create({
       headers: {
           Authorization: 'Bearer '+spotifyAuthToken,
       },
-      });
-      const isPlayingRquest = {
-        method: 'GET',
-        url: 'https://api.spotify.com/v1/me/player'
+    });
+    const isPlayingRquest = {
+      method: 'GET',
+      url: 'https://api.spotify.com/v1/me/player'
+    }
+    axiosInstance(isPlayingRquest)
+    .then(isPlayingResponse => {
+      let hasActiveDevice = isPlayingResponse.data.device !== undefined && isPlayingResponse.data.device.is_active;
+      let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
+      if(!hasActiveDevice) {
+        chatClient.say(broadcasterUserName, "/me No active device");
+        return;
       }
-      axiosInstance(isPlayingRquest)
-      .then(isPlayingResponse => {
-        let hasActiveDevice = isPlayingResponse.data.device !== undefined && isPlayingResponse.data.device.is_active;
-        let isPrivate = hasActiveDevice && isPlayingResponse.data.device.is_private_session;
-        if(!hasActiveDevice) {
-          chatClient.say(broadcasterUserName, "/me No active device");
-          return;
+      if (isPrivate) {
+        chatClient.say(broadcasterUserName, "/me Private Session");
+        return;
+      }
+      let isPlaying = isPlayingResponse.data.is_playing;
+      if (isPlaying) {
+        const pauseRequest = {
+        method: 'PUT',
+        url: 'https://api.spotify.com/v1/me/player/pause'
         }
-        if (isPrivate) {
-          chatClient.say(broadcasterUserName, "/me Private Session");
-          return;
-        }
-        if (isPlaying) {
-          const pauseRequest = {
-          method: 'PUT',
-          url: 'https://api.spotify.com/v1/me/player/pause'
-          }
-          axiosInstance(pauseRequest)
-          .then(pauseResponse => {
-              let responseStr = "/me Paused";
-             chatClient.say(broadcasterUserName, responseStr);
-          })
-          .catch(error => {
-            console.log(error);  
-          });
-        } else {
-         chatClient.say(broadcasterUserName, "/me Nothing is playing right now");
-        }
-      })
-      .catch(error => {
-        console.log(error);
-      }); 
+        axiosInstance(pauseRequest)
+        .then(pauseResponse => {
+            let responseStr = "/me Paused";
+           chatClient.say(broadcasterUserName, responseStr);
+        })
+        .catch(error => {
+          console.log(error);
+        });
+      } else {
+       chatClient.say(broadcasterUserName, "/me Nothing is playing right now");
+      }
+    })
+    .catch(error => {
+      console.log(error);
+    });
   }
 
 async function play(spotifyAuthToken, broadcasterUserName, channelid, userInput) {
@@ -2155,6 +2295,10 @@ async function blacklistTrack(channel_id, url, channel) {
   if (match) {
     const trackId = match[1];
     const spotifyAuthToken = await getSpotifyToken(channel);
+    if (!spotifyAuthToken) {
+      chatClient.say(channel, "/me Spotify authorization has expired. Please re-authenticate at " + (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start");
+      return;
+    }
     const infoRequest = {
       method: 'GET',
       url: 'https://api.spotify.com/v1/tracks/' + trackId
@@ -2261,6 +2405,10 @@ async function blacklistArtist(channel_id, url, channel) {
   if (match) {
     const artistId = match[1];
     const spotifyAuthToken = await getSpotifyToken(channel);
+    if (!spotifyAuthToken) {
+      chatClient.say(channel, "/me Spotify authorization has expired. Please re-authenticate at " + (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start");
+      return;
+    }
     const infoRequest = {
       method: 'GET',
       url: 'https://api.spotify.com/v1/artists/' + artistId
@@ -2389,11 +2537,11 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     axiosInstance(songRequest)
     .then(songResponse => {
       let hasActiveDevice = songResponse.data.device !== undefined && songResponse.data.device.is_active;
-      let isPrivate = hasActiveDevice && songResponse.data.device.is_private_session;
       if(!hasActiveDevice) {
         chatClient.say(broadcasterUserName, "/me No active device");
         return;
       }
+      let isPrivate = hasActiveDevice && songResponse.data.device.is_private_session;
       if (isPrivate) {
         chatClient.say(broadcasterUserName, "/me Private Session");
         return;
@@ -2421,7 +2569,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     })
     .catch(error => {
         console.log("Error getting song: " + error);
-       chatClient.say(broadcasterUserName, "Could not get currently playing song");
+       chatClient.say(broadcasterUserName, "/me Could not get currently playing song");
     });
   }
 
@@ -2438,6 +2586,7 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     }
     axiosInstance(contextRequest)
     .then(contextResponse => {
+      console.log(contextResponse.data);
         let hasActiveDevice = contextResponse.data.device !== undefined && contextResponse.data.device.is_active;
         let isPrivate = hasActiveDevice && contextResponse.data.device.is_private_session;
         if(!hasActiveDevice) {
@@ -2461,8 +2610,11 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
           } else {
             chatClient.say(broadcasterUserName, "/me No playlist active right now");
             return;
-          }
+          } 
           chatClient.say(broadcasterUserName, response);
+        }
+        else {
+          chatClient.say(broadcasterUserName, "/me Currently not listening to a playlist");
         }
     })
     .catch(error => {
@@ -2661,23 +2813,33 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
     }
     const spotifyToken = await getSpotifyToken(channel);
     console.log("Got spotify token: " + spotifyToken);
+    if (!spotifyToken) {
+      console.log("No valid spotify token for channel " + channel);
+      chatClient.say(channel, "/me Spotify authorization has expired. Please re-authenticate at " + (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start");
+      return;
+    }
     console.log("Now executing spotify action");
     switch(action) {
-        case "add":
+      case "add":
+            console.log("add switch case");
             addSongToQueue(spotifyToken, channel, channelid, songRequestFromArgs);
             break;
         case "queue":
+          console.log("queue switch case");
             let queuesize = (args!== null && args.length > 1) ? args[1] : null;
             getQueue(spotifyToken, channel, queuesize);
             break;
         case "reversequeue":
+          console.log("reversequeue switch case");
             let reversequeuesize = (args!== null && args.length > 1) ? args[1] : null;
             getReverseQueue(spotifyToken, channel, reversequeuesize);
             break;
         case "get_volume":
+          console.log("get_volume switch case");
             getVolume(spotifyToken, channel);
             break;
-        case "volume": 
+        case "volume":
+          console.log("volume switch case");
             if (args.length === 3) {
               let volume = parseInt(args[2]);
               changeVolume(spotifyToken, channel, volume, args[1]);
@@ -2694,31 +2856,40 @@ function getSong(spotifyAuthToken, broadcasterUserName) {
             }
             break;
         case "song":
-            getSong(spotifyToken, channel);
-            break;
+          console.log("song switch case");
+          getSong(spotifyToken, channel);
+          break;
         case "songlink":
-            getSonglink(spotifyToken, channel);
-            break;
+          console.log("songlink switch case");
+          getSonglink(spotifyToken, channel);
+          break;
         case "skip":
-            skipSong(spotifyToken, channel);
-            break;
+          console.log("skip switch case");
+          skipSong(spotifyToken, channel);
+          break;
         case "skipback":
-            skipBackSong(spotifyToken, channel);
-            break;
+          console.log("skipback switch case");
+          skipBackSong(spotifyToken, channel);
+          break;
         case "resume":
-            resume(spotifyToken, channel);
-            break;
+          console.log("resume switch case");
+          resume(spotifyToken, channel);
+          break;
         case "play":
-            play(spotifyToken, channel, channelid, songRequestFromArgs);
-            break;
+          console.log("play switch case");
+          play(spotifyToken, channel, channelid, songRequestFromArgs);
+          break;
         case "pause":
-            pause(spotifyToken, channel);
-            break;
+          console.log("pause switch case");
+          pause(spotifyToken, channel);
+          break;
         case "playlist":
-            getPlaylist(spotifyToken, channel);
-            break;
+          console.log("playlist switch case");
+          getPlaylist(spotifyToken, channel);
+          break;
       }
     }
+
 
 async function getSpotifyToken(channel) {
   console.log("Getting spotify token for channel " + channel);
@@ -2730,58 +2901,100 @@ async function getSpotifyToken(channel) {
   const promisePool = pool.promise();
   const [rows,fields] = await promisePool.query(tokenquery, [channel.toLowerCase()]);
   if (rows.length > 0) {
-    // The first result is stored in the `results[0]` object.
     const tokenrow = rows[0];
-    console.log(tokenrow);
+    if (!tokenrow.spotifytoken || !tokenrow.spotifyrefresh || tokenrow.spotifyexpiration === '0') {
+      console.log(`[Spotify Auth] No valid Spotify tokens found for channel ${channel}. Reauthorization required.`);
+      return null;
+    }
+
     let spotifyAuthToken = CryptoJS.AES.decrypt(tokenrow.spotifytoken, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
     let refreshToken = CryptoJS.AES.decrypt(tokenrow.spotifyrefresh, ENCRYPTION_PWD).toString(CryptoJS.enc.Utf8);
     let expirationSeconds = tokenrow.spotifyexpiration;
     let dateInMillisecs = new Date().getTime();
     let dateInSecs = Math.round(dateInMillisecs / 1000);
-    if (dateInSecs < parseInt(expirationSeconds) -20 ) {
+
+    // If access token is still valid (with 20s buffer), return it directly
+    if (spotifyAuthToken && dateInSecs < parseInt(expirationSeconds) - 20) {
       return spotifyAuthToken;
+    }
+
+    if (!refreshToken) {
+      console.log(`[Spotify Auth] Refresh token empty for channel ${channel}. Reauthorization required.`);
+      return null;
     }
 
     let sql = "SELECT * FROM spotify_instance where id = ?";
     console.log("Query database for spotify instance client id and secret");
     const [spotify_rows,spotify_fields] = await promisePool.query(sql, [tokenrow.spotify_instance_id]);
-    console.log(spotify_rows);
     if (spotify_rows.length > 0) {
       const spotifyrow = spotify_rows[0];
-      console.log("SpotifyRow: " + spotifyrow);
-      
 
-      let res = await axios({
-        url: 'https://accounts.spotify.com/api/token',
-        method: 'POST',
-        port: 443,
-        timeout: 8000,
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: 'Basic ' + (new Buffer.from(spotifyrow.client_id + ':' + spotifyrow.client_secret).toString('base64'))
-        },
-        data: {
-          'refresh_token': refreshToken,
-          'grant_type': "refresh_token"
+      try {
+        let res = await axios({
+          url: 'https://accounts.spotify.com/api/token',
+          method: 'POST',
+          port: 443,
+          timeout: 8000,
+          headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: 'Basic ' + (Buffer.from(spotifyrow.client_id + ':' + spotifyrow.client_secret).toString('base64'))
+          },
+          data: querystring.stringify({
+            'refresh_token': refreshToken,
+            'grant_type': "refresh_token"
+          })
+        });
+
+        let newAccesstoken = res.data.access_token;
+        let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
+        let newExpiresin = res.data.expires_in;
+        let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
+
+        if (res.data.refresh_token) {
+          let newRefreshTokenEnc = new String(CryptoJS.AES.encrypt(res.data.refresh_token, ENCRYPTION_PWD)).toString();
+          const updateQuery = `
+              UPDATE tokenstore
+              SET spotifytoken = ?, spotifyrefresh = ?, spotifyexpiration = ?
+              WHERE LOWER(twitchlogin) = ?
+            `;
+          console.log("Updating with query (including rotated refresh token): " + updateQuery);
+          await promisePool.query(updateQuery, [newAccesstokenEnc, newRefreshTokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
+        } else {
+          const updateQuery = `
+              UPDATE tokenstore
+              SET spotifytoken = ?, spotifyexpiration = ?
+              WHERE LOWER(twitchlogin) = ?
+            `;
+          console.log("Updating with query: " + updateQuery);
+          await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
         }
-      })
-      console.log(res.data);
-      let newAccesstoken = res.data.access_token;
-      let newAccesstokenEnc = new String(CryptoJS.AES.encrypt(newAccesstoken, ENCRYPTION_PWD)).toString();
-      let newExpiresin = res.data.expires_in;
-      let dateInMillisecs = new Date().getTime();
-      let dateInSecs = Math.round(dateInMillisecs / 1000);
-      let newCalcExpiryDate = newExpiresin + dateInSecs - 10;
-      const updateQuery = `
-          UPDATE tokenstore
-          SET spotifytoken = ?, spotifyexpiration = ?
-          WHERE LOWER(twitchlogin) = ?
-        `;
-      console.log("Updating with query: " + updateQuery);
-      const [rows,fields] = await promisePool.query(updateQuery, [newAccesstokenEnc, newCalcExpiryDate, channel.toLowerCase()]);
-      return newAccesstoken;
+        return newAccesstoken;
+      } catch (err) {
+        // Spotify returns 400 Bad Request with error: "invalid_grant" when refresh token expires (6-month expiration)
+        const errorData = err.response ? err.response.data : null;
+        const isInvalidGrant = (err.response && err.response.status === 400) &&
+          (errorData && (errorData.error === 'invalid_grant' || (typeof errorData === 'string' && errorData.includes('invalid_grant'))));
+
+        if (isInvalidGrant || (err.response && err.response.status === 400)) {
+          console.warn(`[Spotify Auth] Refresh token expired (invalid_grant) for channel ${channel}. Discarding stored token.`);
+          // Discard stored token - do NOT retry the refresh
+          const discardQuery = `
+            UPDATE tokenstore
+            SET spotifytoken = '', spotifyrefresh = '', spotifyexpiration = '0'
+            WHERE LOWER(twitchlogin) = ?
+          `;
+          await promisePool.query(discardQuery, [channel.toLowerCase()]);
+
+          const authUrl = (process.env.APP_BASE_URI || "https://ananasmusicbot.de") + "/start";
+          chatClient.say(channel, `/me Spotify authorization has expired (refresh tokens expire after 6 months). Please re-authenticate at ${authUrl}`);
+        } else {
+          console.error(`[Spotify Auth] Error refreshing token for channel ${channel}:`, err.response ? err.response.data : err.message);
+        }
+        return null;
+      }
     }
   }
+  return null;
 }
 
 async function getTwitchTokenByChannel(channel) {
@@ -2971,3 +3184,29 @@ async function isLive(channel) {
     return true;
   }
 }
+
+
+async function createCustomReward(broadcaster_id, title, cost) {
+  const token = await authProvider.getAccessTokenForIntent('chat');
+  const url = "https://api.twitch.tv/helix/channel_points/custom_rewards?broadcaster_id=" + broadcaster_id;
+  let data = {
+    title : title,
+    cost: cost,
+    is_user_input_required: true,
+    prompt: "Spotify-Link / Songname + Artist"
+  }
+  console.log(token);
+  /*
+  let result = await axios.post(url, data, {
+    headers: {
+      'Client-ID': clientId,
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token.accessToken}`
+    }
+  });
+  let response = result.data;
+  console.log(response);
+  */
+}
+
+createCustomReward(418937550, "Test", 200);

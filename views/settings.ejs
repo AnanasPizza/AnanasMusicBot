@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings Form</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
+        h1, h2 {
+            color: #333;
+        }
+
+        .settings-section {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        input[type="text"], 
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button[type="submit"] {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        li {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Settings</h1>
+
+    <section class="settings-section">
+        <h2>General Settings</h2>
+        <form action="/update-general-settings" method="post">
+            <% settings.generalSettings.forEach((setting, index) => { %>
+                <div class="form-group">
+                    <label for="generalSettingKey<%= index %>"><%= setting.key %>:</label>
+
+                    <% if (setting.key === 'live_only') { %>
+                        <select id="generalSettingKey<%= index %>" name="generalSettings[<%= index %>][val]">
+                            <option value="ON" <%= setting.val === 'ON' ? 'selected' : '' %>>ON</option>
+                            <option value="OFF" <%= setting.val === 'OFF' ? 'selected' : '' %>>OFF</option>
+                        </select>
+                        <input type="hidden" name="generalSettings[<%= index %>][key]" value="<%= setting.key %>"> 
+                    <% } else if (setting.key === 'max_duration') { %>
+                        <input type="number" name="generalSettings[<%= index %>][val]" value="<%= setting.val %>" min="0" max="10000">
+                        <input type="hidden" name="generalSettings[<%= index %>][key]" value="<%= setting.key %>"> 
+                    <% } else { %>
+                        <input type="text" id="generalSettingKey<%= index %>" name="generalSettings[<%= index %>][key]" value="<%= setting.key %>" readonly> 
+                        <input type="text" name="generalSettings[<%= index %>][val]" value="<%= setting.val %>">
+                    <% } %>
+                </div>
+            <% }); %>
+
+            <button type="submit">Save General Settings</button>
+        </form>
+    </section>
+
+    <section class="settings-section">
+        <h2>Blacklisted Users</h2>
+        <ul>
+            <% settings.blacklistedUsers.forEach((user, index) => { %>
+                <li>"<%= user %>"</li> 
+            <% }); %>
+        </ul>
+
+        <form action="/update-blacklisted-users" method="post">
+            <div class="form-group">
+                <label for="blacklistedUsers">Add user:</label>
+                <input type="text" id="blacklistedUsers" name="blacklistedUsers"> 
+            </div>
+            <button type="submit">Save Blacklisted Users</button>
+        </form>
+    </section>
+
+    <section class="settings-section">
+        <h2>Blacklisted Artists</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Artist</th>
+                    <th>Artist-ID</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% settings.blacklistedArtists.forEach((artist, index) => { %>
+                    <tr>
+                        <td><%= artist.name %></td>
+                        <td><%= artist.artistId %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+
+        <form action="/update-blacklisted-artists" method="post">
+            <div class="form-group">
+                <label for="newArtistId">Add artist (Spotify Link):</label>
+                <input type="text" id="newArtistId" name="newArtistId" placeholder="Artist Spotify Link">
+            </div>
+            <button type="submit">Save Blacklisted Artists</button>
+        </form>
+    </section>
+
+    <section class="settings-section">
+        <h2>Blacklisted Tracks</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Songname</th>
+                    <th>Artist</th>
+                    <th>Track-ID</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% settings.blacklistedTracks.forEach((track, index) => { %>
+                    <tr>
+                        <td><%= track.songname %></td>
+                        <td><%= track.artist %></td>
+                        <td><%= track.trackId %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+
+        <form action="/update-blacklisted-tracks" method="post">
+            <div class="form-group">
+                <label for="newTrackId">Add track (Spotify Link):</label>
+                <input type="text" id="newTrackId" name="newTrackId" placeholder="Spotify Link">
+            </div>
+            <button type="submit">Save Blacklisted Tracks</button>
+        </form>
+    </section>
+
+</body>
+</html>

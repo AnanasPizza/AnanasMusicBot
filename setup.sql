@@ -95,7 +95,20 @@ CREATE TABLE `tokenstore` (
   `twitchlogin` varchar(255) NOT NULL,
   `spotifytoken` varchar(500) NOT NULL,
   `spotifyrefresh` varchar(500) NOT NULL,
-  `spotifyexpiration` varchar(255) NOT NULL
+  `spotifyexpiration` varchar(255) NOT NULL,
+  `spotify_instance_id` int NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
+
+-- --------------------------------------------------------
+
+--
+-- Tabellenstruktur für Tabelle `spotify_instance`
+--
+
+CREATE TABLE `spotify_instance` (
+  `id` int NOT NULL,
+  `client_id` varchar(255) NOT NULL,
+  `client_secret` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 
 --
@@ -144,6 +157,12 @@ ALTER TABLE `tokenstore`
   ADD UNIQUE KEY `twitchlogin` (`twitchlogin`);
 
 --
+-- Indizes für die Tabelle `spotify_instance`
+--
+ALTER TABLE `spotify_instance`
+  ADD PRIMARY KEY (`id`);
+
+--
 -- AUTO_INCREMENT für exportierte Tabellen
 --
 
@@ -169,6 +188,12 @@ ALTER TABLE `blacklisted_users`
 -- AUTO_INCREMENT für Tabelle `tokenstore`
 --
 ALTER TABLE `tokenstore`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT für Tabelle `spotify_instance`
+--
+ALTER TABLE `spotify_instance`
   MODIFY `id` int NOT NULL AUTO_INCREMENT;
 COMMIT;
 
